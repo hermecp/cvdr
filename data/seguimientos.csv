@@ -1,0 +1,6 @@
+id_seguimiento,id_lead,fecha,hora,etapa,proxima_accion_fecha,tipo_mensaje,estado_mensaje,canal,atendido_por,observaciones
+1,1,2025-08-30,10:15:00,Contacted,2025-09-02,Seguimiento inicial (Contacted),Enviado,WhatsApp,Nancy,Se envió info general
+2,2,2025-08-31,11:30:00,SQL,2025-09-03,Cierre suave (SQL),Respondido,Teléfono,Favio,Aceptó agendar demo
+3,4,2025-09-01,09:00:00,Nurturing,2025-09-01,Contenido de valor (Nurturing),Enviado,Correo,Hayde,Envió temario PDF
+4,5,2025-08-31,16:45:00,Won,,Bienvenida alumno (Won),Enviado,WhatsApp,Nora,Entrega de acceso
+5,1,2025-09-01,13:16:46,Lost,2025-09-02,Cierre cordial (Lost),Respondido,WhatsApp,Favio,
