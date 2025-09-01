@@ -1,3 +1,0 @@
-id_seguimiento,id_lead,fecha,hora,tipo_mensaje,estado_mensaje,canal,atendido_por,mensaje_sugerido,respuesta,observaciones
-1,1,2025-08-30,01:03:23,Envio de info (MQL),Enviado,WhatsApp,Favio,"Hola Ana, te comparto el temario...",,
-2,2,2025-08-30,01:03:23,Cierre suave (SQL),Respondido,WhatsApp,Nancy,"Con lo que me comentaste, IA empresas te ayudará...",Agendar llamada,
