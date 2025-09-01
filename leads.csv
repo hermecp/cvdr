@@ -1,4 +1,0 @@
-id_lead,fecha_registro,hora_registro,nombre,apellidos,alias,edad,celular,telefono,correo,interes_curso,como_enteraste,lead_status,funnel_etapas,fecha_ultimo_contacto,observaciones,owner,proxima_accion_fecha,proxima_accion_desc,lead_score,probabilidad_cierre,monto_estimado,motivo_perdida,fecha_entrada_etapa
-1,2025-08-30,01:03:23,Ana,Pérez,Ani,28,5551234567,,ana@example.com,IA profesionales inmobiliarios,Facebook,MQL,,,Interesada en fechas,Favio,2025-08-30,Llamar 6pm,35,0.5,2500,,2025-08-30
-2,2025-08-30,01:03:23,Luis,García,,34,5559876543,,luis@example.com,IA empresas,Google,SQL,,,Pidió temario,Nancy,,,45,0.6,5000,,2025-08-30
-3,2025-08-30,01:03:23,María,López,Mary,22,5552221111,,maria@example.com,Inglés,Referido,Awareness,,,,Rosario,,,20,0.2,,,2025-08-30
