@@ -1,9 +1,12 @@
-# app_streamlit_v10_1.py
+# app_streamlit_v10_2.py
 # Mini-CRM CVDR — LOGIN + Leads + Seguimiento (Agenda integrada) + Dashboard (mejorado)
-# v10.1
-# - Leads: tras guardar, el nuevo registro aparece arriba y se resetea la paginación (sin recargar manual).
-# - Seguimiento/Agenda: checkbox "Cerrar acción..." para quitar del calendario al registrar seguimiento.
-# - Si reprogramas (+días) o cambias la fecha, la acción migra a la nueva fecha.
+# Cambios:
+# - Navegación por BOTONES (no radio en sidebar)
+# - Validaciones: no permitir leads vacíos (nombre obligatorio + al menos celular o correo)
+# - Sustituido st.experimental_rerun() -> st.rerun()
+# - Editor de lead y seguimiento con st.rerun() tras guardar para evitar estados inconsistentes
+# - “Actualizar estado / respuesta (último mensaje)” ahora es OPCIONAL con checkbox
+# - Comprobaciones de existencia antes de iloc[0]
 
 from __future__ import annotations
 import pandas as pd
@@ -13,7 +16,7 @@ from pathlib import Path
 from datetime import datetime, date, timedelta
 import hashlib
 
-st.set_page_config(page_title="Mini-CRM CVDR v10.1", layout="wide")
+st.set_page_config(page_title="Mini-CRM CVDR v10.2", layout="wide")
 
 # =========================
 # Login / Usuarios
@@ -254,7 +257,7 @@ if "funnel_etapas" not in leads.columns:
 leads["lead_score"] = leads.apply(compute_lead_score, axis=1).astype(str)
 
 # =========================
-# Login UI
+# Login UI (sidebar)
 # =========================
 def login_sidebar():
     with st.sidebar:
@@ -280,14 +283,24 @@ login_sidebar()
 require_login()
 
 # =========================
-# Menú
+# Menú (BOTONES en el cuerpo)
 # =========================
-MENU_ALL = ["👤 Leads", "✉️ Seguimiento", "📊 Dashboard"]
-initial_menu = st.session_state.get("menu", "👤 Leads")
-with st.sidebar:
-    st.markdown("---")
-    menu = st.radio("Navegación", MENU_ALL, index=MENU_ALL.index(initial_menu))
-st.session_state["menu"] = menu
+if "menu" not in st.session_state:
+    st.session_state["menu"] = "👤 Leads"
+
+st.markdown("### Navegación")
+b1, b2, b3 = st.columns(3)
+if b1.button("👤 Leads", use_container_width=True):
+    st.session_state["menu"] = "👤 Leads"
+    st.rerun()
+if b2.button("✉️ Seguimiento", use_container_width=True):
+    st.session_state["menu"] = "✉️ Seguimiento"
+    st.rerun()
+if b3.button("📊 Dashboard", use_container_width=True):
+    st.session_state["menu"] = "📊 Dashboard"
+    st.rerun()
+
+menu = st.session_state["menu"]
 
 # =========================
 # UI helpers
@@ -366,7 +379,7 @@ def page_leads():
                 c3.markdown(owner_badge(r.get('owner','')), unsafe_allow_html=True)
                 if c4.button("Editar", key=f"edit_{r['id_lead']}"):
                     st.session_state["lead_to_edit"] = str(r["id_lead"])
-                    st.experimental_rerun()
+                    st.rerun()  # antes experimental_rerun
 
     st.divider()
     st.subheader("Registrar nuevo lead")
@@ -385,44 +398,65 @@ def page_leads():
         stages = emb["stage"].tolist()
         lead_status_lbl = st.selectbox("Etapa (en) (es)", [STAGE_LABEL[s] for s in stages], index=0)
         obs = st.text_area("Observaciones")
+
         ok = st.form_submit_button("Guardar lead")
         if ok:
+            # VALIDACIONES: no leads vacíos
+            nombre_ok = (nombre or "").strip() != ""
+            contacto_ok = (norm_phone(celular) != "") or (norm_email(correo) != "")
+            if not nombre_ok:
+                st.error("El nombre es obligatorio.")
+                st.stop()
+            if not contacto_ok:
+                st.error("Debes capturar al menos **celular** o **correo**.")
+                st.stop()
+            if (correo or "").strip() and "@" not in correo:
+                st.error("El correo no parece válido.")
+                st.stop()
+
             lead_status_en = stages[[STAGE_LABEL[s] for s in stages].index(lead_status_lbl)]
             new_id = next_id(leads, "id_lead")
             new_row = {
                 "id_lead": str(new_id),
                 "fecha_registro": now_date(),
                 "hora_registro": now_time(),
-                "nombre": nombre, "apellidos": apellidos, "alias": alias,
+                "nombre": (nombre or "").strip(),
+                "apellidos": (apellidos or "").strip(),
+                "alias": (alias or "").strip(),
                 "edad": int(edad) if str(edad) != "" else "",
                 "celular": norm_phone(celular), "telefono": "",
                 "correo": norm_email(correo),
                 "interes_curso": interes, "como_enteraste": canal,
                 "lead_status": lead_status_en,
                 "funnel_etapas": "",
-                "fecha_ultimo_contacto": "", "observaciones": obs,
+                "fecha_ultimo_contacto": "", "observaciones": (obs or "").strip(),
                 "owner": owner_name_default(),
                 "proxima_accion_fecha": "", "proxima_accion_desc": "",
                 "lead_score": "0", "probabilidad_cierre": "0.2",
                 "monto_estimado": "", "motivo_perdida": "",
                 "fecha_entrada_etapa": now_date(),
             }
-            # Insertar arriba y recalcular score
             leads_local = pd.DataFrame([new_row])
             leads_local["lead_score"] = leads_local.apply(compute_lead_score, axis=1).astype(str)
-            # concatenar al inicio
             leads = pd.concat([leads_local, leads], ignore_index=True)
             save_csv(leads, FILES["leads"])
-            # Resetear a página 1 para que se vea arriba
-            st.session_state["leads_page_idx"] = 0
+
+            st.session_state["leads_page_idx"] = 0  # ver arriba inmediatamente
             st.success(f"Lead guardado (ID {new_id}).")
+            st.rerun()
 
     # Editor
     lead_edit_id = st.session_state.get("lead_to_edit")
     if lead_edit_id:
         st.divider()
         st.subheader("Editar lead")
-        row = leads[leads["id_lead"].astype(str) == str(lead_edit_id)].iloc[0].copy()
+        mask = leads["id_lead"].astype(str) == str(lead_edit_id)
+        if not mask.any():
+            st.warning("El lead a editar ya no existe.")
+            st.session_state.pop("lead_to_edit", None)
+            st.stop()
+        row = leads.loc[mask].iloc[0].copy()
+
         with st.form(f"form_edit_{lead_edit_id}"):
             c1, c2, c3 = st.columns(3)
             nombre_e = c1.text_input("Nombre", value=row.get("nombre", ""))
@@ -443,8 +477,20 @@ def page_leads():
             prox_d = st.text_input("Próxima acción (descripción)", value=row.get("proxima_accion_desc", ""))
             ok = st.form_submit_button("Actualizar")
             if ok:
+                # mismas validaciones mínimas para evitar vacíos graves
+                nombre_ok = (nombre_e or "").strip() != ""
+                contacto_ok = (norm_phone(celular_e) != "") or (norm_email(correo_e) != "")
+                if not nombre_ok:
+                    st.error("El nombre es obligatorio.")
+                    st.stop()
+                if not contacto_ok:
+                    st.error("Debes capturar al menos **celular** o **correo**.")
+                    st.stop()
+                if (correo_e or "").strip() and "@" not in correo_e:
+                    st.error("El correo no parece válido.")
+                    st.stop()
+
                 estado_en = stages[[STAGE_LABEL[s] for s in stages].index(estado_e_lbl)]
-                mask = leads["id_lead"].astype(str) == str(lead_edit_id)
                 prev_stage = normalize_stage(row.get("lead_status", "Awareness"))
                 leads.loc[mask, [
                     "nombre", "apellidos", "alias", "edad", "celular", "correo",
@@ -452,10 +498,11 @@ def page_leads():
                     "lead_status", "observaciones",
                     "proxima_accion_fecha", "proxima_accion_desc",
                 ]] = [
-                    nombre_e, apellidos_e, alias_e, int(edad_e) if str(edad_e) != "" else "",
+                    (nombre_e or "").strip(), (apellidos_e or "").strip(), (alias_e or "").strip(),
+                    int(edad_e) if str(edad_e) != "" else "",
                     norm_phone(celular_e), norm_email(correo_e),
                     interes_e, canal_e,
-                    estado_en, obs_e,
+                    estado_en, (obs_e or "").strip(),
                     prox_f.strftime("%Y-%m-%d") if prox_d else "", prox_d,
                 ]
                 row_now = leads.loc[mask].iloc[0].to_dict()
@@ -464,6 +511,8 @@ def page_leads():
                     leads.loc[mask, "fecha_entrada_etapa"] = now_date()
                 save_csv(leads, FILES["leads"])
                 st.success("Lead actualizado.")
+                st.session_state.pop("lead_to_edit", None)
+                st.rerun()
 
 def page_followup():
     global leads, segs
@@ -493,7 +542,7 @@ def page_followup():
                 cB.markdown(stage_badge(row.get("lead_status","Awareness")), unsafe_allow_html=True)
                 if cC.button("📨 Abrir", key=f"open_{row['id_lead']}"):
                     st.session_state["lead_for_followup_id"] = str(row["id_lead"])
-                    st.experimental_rerun()
+                    st.rerun()  # antes experimental_rerun
                 st.caption(f"➡️ {row.get('proxima_accion_desc','') or '—'}")
 
     st.divider()
@@ -514,7 +563,11 @@ def page_followup():
     if not lead_id:
         return
 
-    lead_ctx = leads[leads["id_lead"].astype(str) == str(lead_id)].iloc[0]
+    mask_lead = leads["id_lead"].astype(str) == str(lead_id)
+    if not mask_lead.any():
+        st.warning("El lead seleccionado ya no existe.")
+        return
+    lead_ctx = leads.loc[mask_lead].iloc[0]
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([5,3,2])
@@ -588,12 +641,15 @@ def page_followup():
 
             # Actualizar lead
             mask = leads["id_lead"].astype(str) == str(lead_id)
+            if not mask.any():
+                st.warning("El lead seleccionado ya no existe.")
+                st.rerun()
             prev_stage = normalize_stage(leads.loc[mask].iloc[0].get("lead_status","Awareness"))
-            old_next = str(leads.loc[mask].iloc[0].get("proxima_accion_fecha",""))  # para comparación
-            leads.loc[mask, "lead_status"] = etapa_en
-
             selected_str = selected_date.strftime("%Y-%m-%d")
             prox_str = prox_fecha.strftime("%Y-%m-%d")
+
+            leads.loc[mask, "lead_status"] = etapa_en
+
             # Lógica de agenda:
             # - Si close_today y no reprogramas (+0) y prox_fecha == selected_date -> limpiar (quitar del calendario)
             # - Si reprogramas (>0) -> mover a hoy + N
@@ -616,39 +672,44 @@ def page_followup():
                 leads.loc[mask, "fecha_entrada_etapa"] = now_date()
             save_csv(leads, FILES["leads"])
 
-            # Opcional: limpiar selección para no mantener el lead abierto
-            # y que se note el "desaparecer" del calendario si aplicó.
             st.session_state.pop("lead_for_followup_id", None)
-
             st.success("Seguimiento registrado y lead actualizado.")
+            st.rerun()
 
+    # ===== sección opcional =====
     st.divider()
-    st.subheader("Actualizar estado / respuesta (último mensaje)")
-    if not hist.empty:
-        last_id = hist.iloc[-1]["id_seguimiento"]
-        sel = segs[segs["id_seguimiento"] == last_id].iloc[0]
-        with st.form(f"form_resp_{last_id}"):
-            estados = ["Enviado", "Sin respuesta", "Respondido", "Perdido"]
-            idx = estados.index(sel["estado_mensaje"]) if sel["estado_mensaje"] in estados else 0
-            nuevo_estado = st.selectbox("Estado del mensaje", estados, index=idx)
-            nueva_resp = st.text_area("Respuesta del lead", value=sel.get("respuesta", ""))
-            nueva_obs = st.text_area("Observaciones", value=sel.get("observaciones", ""))
-            cA, cB = st.columns(2)
-            reprog_plus = cA.selectbox("Reprogramar +días", [0,1,2,3,5,7,14], index=0)
-            ok = cB.form_submit_button("Guardar")
-            if ok:
-                m = segs["id_seguimiento"] == last_id
-                segs.loc[m, ["estado_mensaje", "respuesta", "observaciones"]] = [nuevo_estado, nueva_resp, nueva_obs]
-                save_csv(segs, FILES["seguimientos"])
-                mask = leads["id_lead"].astype(str) == str(lead_id)
-                if int(reprog_plus) > 0:
-                    nueva = (date.today() + timedelta(days=int(reprog_plus))).strftime("%Y-%m-%d")
-                    leads.loc[mask, ["proxima_accion_fecha", "proxima_accion_desc"]] = [nueva, "Reprogramado desde seguimiento"]
-                leads.loc[mask, "fecha_ultimo_contacto"] = now_date()
-                row_now = leads.loc[mask].iloc[0]
-                leads.loc[mask, "lead_score"] = str(compute_lead_score(row_now))
-                save_csv(leads, FILES["leads"])
-                st.success("Seguimiento actualizado.")
+    mostrar_actualizar_ultimo = st.checkbox(
+        "Mostrar sección: Actualizar estado / respuesta (último mensaje)",
+        value=False
+    )
+    if mostrar_actualizar_ultimo:
+        st.subheader("Actualizar estado / respuesta (último mensaje)")
+        if not hist.empty:
+            last_id = hist.iloc[-1]["id_seguimiento"]
+            sel = segs[segs["id_seguimiento"] == last_id].iloc[0]
+            with st.form(f"form_resp_{last_id}"):
+                estados = ["Enviado", "Sin respuesta", "Respondido", "Perdido"]
+                idx = estados.index(sel["estado_mensaje"]) if sel["estado_mensaje"] in estados else 0
+                nuevo_estado = st.selectbox("Estado del mensaje", estados, index=idx)
+                nueva_resp = st.text_area("Respuesta del lead", value=sel.get("respuesta", ""))
+                nueva_obs = st.text_area("Observaciones", value=sel.get("observaciones", ""))
+                cA, cB = st.columns(2)
+                reprog_plus = cA.selectbox("Reprogramar +días", [0,1,2,3,5,7,14], index=0)
+                ok = cB.form_submit_button("Guardar")
+                if ok:
+                    m = segs["id_seguimiento"] == last_id
+                    segs.loc[m, ["estado_mensaje", "respuesta", "observaciones"]] = [nuevo_estado, nueva_resp, nueva_obs]
+                    save_csv(segs, FILES["seguimientos"])
+                    mask = leads["id_lead"].astype(str) == str(lead_id)
+                    if int(reprog_plus) > 0:
+                        nueva = (date.today() + timedelta(days=int(reprog_plus))).strftime("%Y-%m-%d")
+                        leads.loc[mask, ["proxima_accion_fecha", "proxima_accion_desc"]] = [nueva, "Reprogramado desde seguimiento"]
+                    leads.loc[mask, "fecha_ultimo_contacto"] = now_date()
+                    row_now = leads.loc[mask].iloc[0]
+                    leads.loc[mask, "lead_score"] = str(compute_lead_score(row_now))
+                    save_csv(leads, FILES["leads"])
+                    st.success("Seguimiento actualizado.")
+                    st.rerun()
 
 # ===== Helpers de tiempo para el Dashboard =====
 def start_of_week(d: date) -> date:
@@ -804,11 +865,11 @@ def page_dashboard():
 # =========================
 # Enrutamiento
 # =========================
-if st.session_state["menu"] == "👤 Leads":
+if menu == "👤 Leads":
     page_leads()
-elif st.session_state["menu"] == "✉️ Seguimiento":
+elif menu == "✉️ Seguimiento":
     page_followup()
-elif st.session_state["menu"] == "📊 Dashboard":
+elif menu == "📊 Dashboard":
     page_dashboard()
 
-st.caption("Leads: alta visible inmediata. Seguimiento: checkbox para quitar del calendario al registrar. Dashboard con KPIs y colores por etapa.")
+st.caption("Leads: alta visible inmediata. Seguimiento: checkbox para quitar del calendario al registrar. Dashboard con KPIs y colores por etapa. Sección de actualización del último mensaje es opcional.")
