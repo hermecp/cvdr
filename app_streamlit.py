@@ -38,11 +38,11 @@ def _hash(p: str) -> str:
 DEFAULT_USER_ROWS = [
     ["admin","Admin","Admin","ba26148e3bc77341163135d123a4dc26664ff0497da04c0b3e83218c97f70c45"],         # CVDR873
     ["director","Director","Director","c34926c2783dca6cf34d1160ed5a04e1615cb813d3b5798efc29cc590cce4c91"],   # CVDR843
-    ["subidirector","Subidirector","Subidirector","58845944d08671209339de539469a100c8e9d6e17dcee9a447c7751937f7cb48"],  # CVDR52874
+    ["subdirector","subdirector","subdirector","58845944d08671209339de539469a100c8e9d6e17dcee9a447c7751937f7cb48"],  # CVDR52874
     ["favio","Favio","Ventas","e28ebb5d991f9ebbc5f2d26b199586e9bfb8fffd3b76dca200efd75eb68e999d"],          # CVDR394
     ["nancy","Nancy","Ventas","64b1bce63509372952ad7191af86bddcb9939772404c236ff67b89d0442496d0"],          # CVDR363
     ["rosario","Rosario","Ventas","706f42010b29d6376c768d717a19b49dc50b8b7133bffa1ae36d0fbbc32d59bc"],       # CVDR434
-    ["hayde","Hayde","Comunicación","6b90d996f7c98698cd95d0d86f1298dbb9df89df34f16136b259a4efcaba04d8"],     # CVDR152
+    ["haydee","haydee","Comunicación","6b90d996f7c98698cd95d0d86f1298dbb9df89df34f16136b259a4efcaba04d8"],     # CVDR152
     ["nora","Nora","Comunicación","f54fd67046eeca39cd1f760730d3b48b1c00d383f0c5b9fa5ace0a7683a22058"],       # CVDR192
 ]
 
