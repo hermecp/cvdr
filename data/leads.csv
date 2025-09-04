@@ -1,6 +1,0 @@
-id_lead,fecha_registro,hora_registro,nombre,apellidos,alias,edad,celular,telefono,correo,interes_curso,como_enteraste,lead_status,funnel_etapas,fecha_ultimo_contacto,observaciones,owner,proxima_accion_fecha,proxima_accion_desc,lead_score,probabilidad_cierre,monto_estimado,motivo_perdida,fecha_entrada_etapa
-1,2025-08-26,18:54:10,María,Lopez,Mari,29,8112345678,,maria@example.com,IA profesionales inmobiliarios,Facebook,Lost,,2025-09-01,Solicitó info de horarios,Nancy,2025-09-02,Enviar costos y formas de pago,25,0.3,5000,,2025-09-01
-2,2025-08-27,18:54:10,José,Ramírez,,35,8187654321,,jose.ramirez@example.com,IA empresas,Google,SQL,,2025-08-31,Interesado en modalidad sabatina,Favio,2025-09-03,Agendar demo,45,0.6,12000,,2025-08-29
-3,2025-08-28,18:54:10,Ana,Hernandez,,24,,,ana@example.com,Inglés,Referido,MQL,,,—,Rosario,,,15,0.2,3000,,2025-08-28
-4,2025-08-29,18:54:10,Luis,Gomez,LG,42,8180001122,,luisg@example.com,Polivirtual Lic.,WhatsApp,Nurturing,,2025-08-31,Pidió temario detallado,Hayde,2025-09-01,Llamar para resolver dudas,25,0.4,8000,,2025-08-30
-5,2025-08-22,18:54:10,Carla,Mendez,,31,8199990000,,carla@example.com,IA educación universitaria,Instagram,Won,,2025-08-31,Pago confirmado,Nora,,,15,0.9,15000,,2025-08-31
