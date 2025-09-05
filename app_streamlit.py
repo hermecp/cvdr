@@ -579,7 +579,7 @@ def page_followup():
         owners = sorted([o for o in leads.get("owner","").unique() if str(o).strip()])
         funnels = sorted([f for f in leads.get("funnel_etapas","").unique() if str(f).strip()])
 
-        fil_stage = dcol2.multiselect("Etapa", etapas_disp, default=[])
+    
         fil_curso = dcol2.multiselect("Curso", opticursos, default=[])
         # ✅ Evitar error: default SIEMPRE subset de owners
         default_owners = []
