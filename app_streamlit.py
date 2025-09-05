@@ -10,7 +10,7 @@ from urllib.parse import quote_plus
 # =========================
 # CONFIG / PATHS
 # =========================
-st.set_page_config(page_title="Mini-CRM CVDR v12.4", layout="wide")
+st.set_page_config(page_title="Mini-CRM CVDR v12.5", layout="wide")
 BASE = (Path(__file__).resolve().parent / "data")
 BASE.mkdir(parents=True, exist_ok=True)
 FILES = {
@@ -25,7 +25,7 @@ def _hash(p: str) -> str:
     return hashlib.sha256((p or "").encode("utf-8")).hexdigest()
 
 # =========================
-# USUARIOS
+# USUARIOS Y ROLES
 # =========================
 DEFAULT_USER_ROWS = [
     ["admin","Admin","Admin","ba26148e3bc77341163135d123a4dc26664ff0497da04c0b3e83218c97f70c45"],         # CVDR873
@@ -69,6 +69,8 @@ def require_login():
 def owner_name_default() -> str:
     if not is_logged(): return "Asesor"
     return st.session_state["user"]["name"]
+def current_role() -> str:
+    return st.session_state["user"]["role"] if is_logged() else ""
 
 # =========================
 # EMBUDO
@@ -83,8 +85,8 @@ STAGE_LABEL = {
 SPANISH_TO_EN = {
     "Captado":"Awareness","Contactado":"Contacted","Info enviada":"MQL","Info_enviada":"MQL","MQL":"MQL",
     "Interesado":"SQL","En seguimiento":"Nurturing","En_seguimiento":"Nurturing",
-    "Depósito":"Demo_Booked","Preinscripción":"Demo_Booked","Inscrito":"Won","Inscrita":"Won",
-    "Perdido":"Lost","Reactivado":"Re_Engaged",
+    "Depósito":"Demo_Booked","Preinscripción":"Demo_Booked",
+    "Inscrito":"Won","Inscrita":"Won","Perdido":"Lost","Reactivado":"Re_Engaged",
 }
 STAGE_COLORS = {
     "Awareness":("#F8FAFC","#0F172A"),"Contacted":("#EFF6FF","#075985"),"MQL":("#FEFCE8","#713F12"),
@@ -189,7 +191,7 @@ def parse_age_to_int(s: str, default: int = 0) -> int:
     return default
 
 def parse_date_smart(x):
-    """Intenta YYYY-MM-DD; si falla, vuelve con dayfirst=True (sin warnings)."""
+    """Primero intenta YYYY-MM-DD; si falla, intenta con dayfirst=True. Devuelve Timestamp."""
     if isinstance(x, pd.Series):
         s1 = pd.to_datetime(x, errors="coerce", format="%Y-%m-%d")
         if s1.isna().any():
@@ -227,10 +229,14 @@ if not Path(FILES["embudo"]).exists():
 
 leads = ensure_columns(load_csv(FILES["leads"], dtype=str), SCHEMA_LEADS, DEFAULTS)
 segs  = ensure_columns(load_csv(FILES["seguimientos"], dtype=str), SCHEMA_SEGS, {})
+# normaliza nombres de columnas
+leads.columns = leads.columns.str.strip()
+segs.columns  = segs.columns.str.strip()
+
 emb_raw = load_csv(FILES["embudo"], dtype=str)
 emb = emb_raw[["stage"]].drop_duplicates() if "stage" in emb_raw.columns else pd.DataFrame({"stage": STAGE_ORDER})
 
-# Derivados en memoria
+# Derivados
 leads["edad"] = leads["edad"].astype(str).fillna("")
 leads["edad_num"] = leads["edad"].apply(lambda s: parse_age_to_int(s,0)).astype(int)
 leads["etapa_mostrar"] = leads.apply(stage_value, axis=1)
@@ -304,13 +310,12 @@ def lead_label(r: pd.Series) -> str:
     return f"{name}{(' • '+genero) if genero else ''}{(' • '+tel) if tel else ''}"
 
 # =========================
-# PÁGINA LEADS (listado, filtros, edición y alta)
+# PÁGINA LEADS
 # =========================
 def page_leads():
     global leads
     st.markdown("## 👤 Leads")
 
-    # Agregados hoy
     today_str = now_date()
     if not leads.empty and "fecha_registro" in leads.columns:
         hoy = leads[leads["fecha_registro"] == today_str].copy()
@@ -326,7 +331,6 @@ def page_leads():
                 if c not in hoy.columns: hoy[c] = ""
             st.dataframe(hoy[cols_hoy], use_container_width=True, hide_index=True)
 
-    # Filtros
     with st.expander("🔎 Filtros", expanded=True):
         f1, f2, f3, f4, f5 = st.columns([1.6,1.2,1.2,1.4,1.1])
         q = f1.text_input("Buscar (nombre, email, teléfono)", key="leads_search")
@@ -351,7 +355,6 @@ def page_leads():
     if fil_owner: L = L[L["owner"].isin(fil_owner)]
     if fil_genero: L = L[L["genero"].isin(fil_genero)]
 
-    # Vista + orden por fecha/hora
     cols_vista = ["id_lead","fecha_registro","hora_registro","nombre","apellidos","genero","celular","correo",
                   "interes_curso","como_enteraste","owner","etapa_mostrar","funnel_etapas","lead_status",
                   "proxima_accion_fecha","proxima_accion_desc","fecha_ultimo_contacto","lead_score"]
@@ -367,7 +370,6 @@ def page_leads():
                        file_name="leads_filtrado.csv", mime="text/csv")
     st.dataframe(L[cols_vista], use_container_width=True, hide_index=True)
 
-    # ====== Edición de lead (búsqueda global) ======
     st.divider()
     st.subheader("Editar lead (búsqueda global)")
     with st.expander("Buscar y editar", expanded=True):
@@ -386,7 +388,6 @@ def page_leads():
             st.query_params["lead"] = str(lead_edit_id)
             editar_lead_por_id(lead_edit_id)
 
-    # ====== Alta de lead ======
     st.divider()
     st.subheader("Registrar nuevo lead")
     with st.form("form_new_lead", clear_on_submit=True):
@@ -445,7 +446,6 @@ def page_leads():
             leads_local["lead_score"] = leads_local.apply(compute_lead_score, axis=1).astype(str)
             leads = pd.concat([leads_local, leads], ignore_index=True)
             save_csv(leads.drop(columns=[c for c in ["edad_num"] if c in leads.columns]), FILES["leads"])
-            # Rehidratar
             leads["edad"] = leads["edad"].astype(str).fillna("")
             leads["edad_num"] = leads["edad"].apply(lambda s: parse_age_to_int(s,0)).astype(int)
             leads["etapa_mostrar"] = leads.apply(stage_value, axis=1)
@@ -453,7 +453,7 @@ def page_leads():
             st.success(f"Lead guardado (ID {new_id})."); st.rerun()
 
 # =========================
-# EDICIÓN DE LEAD (ROBUSTA)
+# EDICIÓN DE LEAD
 # =========================
 def editar_lead_por_id(lead_edit_id: str):
     global leads
@@ -518,7 +518,6 @@ def editar_lead_por_id(lead_edit_id: str):
                 prox_f.strftime("%Y-%m-%d") if isinstance(prox_f, date) else "", prox_d,
             ]
 
-            # Derivados consistentes
             leads.loc[mask, "edad_num"] = leads.loc[mask, "edad"].apply(lambda s: parse_age_to_int(s,0)).astype(int)
             leads.loc[mask, "etapa_mostrar"] = leads.loc[mask].apply(stage_value, axis=1)
             row_now = leads.loc[mask].iloc[0]
@@ -527,7 +526,6 @@ def editar_lead_por_id(lead_edit_id: str):
                 leads.loc[mask,"fecha_entrada_etapa"] = now_date()
 
             save_csv(leads.drop(columns=[c for c in ["edad_num"] if c in leads.columns]), FILES["leads"])
-            # Rehidratar
             leads["edad"] = leads["edad"].astype(str).fillna("")
             leads["edad_num"] = leads["edad"].apply(lambda s: parse_age_to_int(s,0)).astype(int)
             leads["etapa_mostrar"] = leads.apply(stage_value, axis=1)
@@ -535,7 +533,7 @@ def editar_lead_por_id(lead_edit_id: str):
             st.success("Lead actualizado."); st.rerun()
 
 # =========================
-# PÁGINA SEGUIMIENTO (fecha única + 'Solo mis leads' opcional)
+# PÁGINA SEGUIMIENTO (una sola ETAPA)
 # =========================
 STAGE_TEMPLATES = {
     "Awareness":   {"tipo": "Bienvenida", "canal": "WhatsApp",
@@ -577,23 +575,16 @@ def page_followup():
         etapas_disp = [s for s in STAGE_ORDER if s in leads["etapa_mostrar"].unique()]
         opticursos = sorted([c for c in leads.get("interes_curso","").unique() if str(c).strip()])
         owners = sorted([o for o in leads.get("owner","").unique() if str(o).strip()])
-        funnels = sorted([f for f in leads.get("funnel_etapas","").unique() if str(f).strip()])
 
-    
+        fil_stage = dcol2.multiselect("Etapa", etapas_disp, default=[])
         fil_curso = dcol2.multiselect("Curso", opticursos, default=[])
-        # ✅ Evitar error: default SIEMPRE subset de owners
-        default_owners = []
-        my_owner = owner_name_default()
-        if solo_mios and my_owner in owners:
-            default_owners = [my_owner]
-        fil_owner = dcol3.multiselect("Owner", owners, default=default_owners,
-                                      help="Activa 'Solo mis leads' para auto-seleccionar tu nombre.")
-        fil_funnel = dcol3.multiselect("Funnel etapas (CSV)", funnels, default=[])
+        fil_owner = dcol3.multiselect("Owner", owners, default=[],
+                                      help="Activa 'Solo mis leads' para ver solo los tuyos.")
         q = st.text_input("🔎 Buscar lead (nombre, correo o teléfono)", key="fu_search")
 
     base = leads.copy()
     if solo_mios:
-        base = base[base["owner"] == my_owner]
+        base = base[base["owner"] == owner_name_default()]
     if q:
         ql = q.lower()
         def _m(r):
@@ -604,10 +595,11 @@ def page_followup():
     if fil_stage: base = base[base["etapa_mostrar"].isin(fil_stage)]
     if fil_curso: base = base[base["interes_curso"].isin(fil_curso)]
     if fil_owner: base = base[base["owner"].isin(fil_owner)]
-    if fil_funnel: base = base[base["funnel_etapas"].isin(fil_funnel)]
 
-    # Próximas acciones SOLO por la fecha elegida
-    base["_prox"] = parse_date_smart(base["proxima_accion_fecha"]).dt.date
+    # Columna segura de próxima acción
+    if "proxima_accion_fecha" not in base.columns:
+        base["proxima_accion_fecha"] = ""
+    base["_prox"] = parse_date_smart(base["proxima_accion_fecha"].astype(str)).dt.date
     due = base[base["_prox"] == selected_date].copy()
 
     st.caption(f"Acciones para {selected_date.strftime('%Y-%m-%d')}: {len(due)}")
@@ -626,7 +618,7 @@ def page_followup():
                     st.session_state["fu_selected_lead_id"] = str(row.get("id_lead",""))
                     st.query_params["lead"] = str(row.get("id_lead",""))
                     st.rerun()
-                st.caption(f"➡️ {row.get('proxima_accion_desc','') or '—'}  \n👤 {row.get('owner','—')}  •  🧭 {row.get('funnel_etapas','—')}")
+                st.caption(f"➡️ {row.get('proxima_accion_desc','') or '—'}  \n👤 {row.get('owner','—')}")
 
     st.divider()
 
@@ -671,6 +663,8 @@ def page_followup():
         hist_cols = ["fecha","hora","etapa","proxima_accion_fecha","tipo_mensaje","estado_mensaje","canal","atendido_por","observaciones"]
         for c in hist_cols:
             if c not in hist.columns: hist[c] = ""
+        if "proxima_accion_fecha" not in hist.columns:
+            hist["proxima_accion_fecha"] = ""
         hist["__fecha"] = parse_date_smart(hist["fecha"])
         hist["__hora"]  = hist["hora"].apply(parse_time_safe)
         hist = hist.sort_values(["__fecha","__hora"])
@@ -678,7 +672,6 @@ def page_followup():
         st.download_button("⬇️ Descargar historial", data=hist[hist_cols].to_csv(index=False).encode("utf-8"),
                            file_name=f"historial_lead_{selected_lead_id}.csv", mime="text/csv")
 
-        st.divider()
         st.subheader("Plantillas por etapa")
         selected_stage_override = None
         previews = []
@@ -733,7 +726,6 @@ def page_followup():
             if not previews and not (msg or "").strip():
                 st.warning("Selecciona al menos una plantilla o redacta un mensaje.")
             else:
-                # registrar seguimiento
                 new_id = next_id(segs, "id_seguimiento")
                 to_add = {
                     "id_seguimiento": str(new_id), "id_lead": str(selected_lead_id),
@@ -748,7 +740,6 @@ def page_followup():
                 segs = pd.concat([segs, segs_local], ignore_index=True)
                 save_csv(segs, FILES["seguimientos"])
 
-                # actualizar lead (SINCRONIZA ambas columnas)
                 mask = leads["id_lead"].astype(str) == str(selected_lead_id)
                 if not mask.any():
                     st.warning("El lead seleccionado ya no existe."); st.rerun()
@@ -768,10 +759,8 @@ def page_followup():
                 leads.loc[mask,"lead_score"] = str(compute_lead_score(row_now))
                 if prev_stage != etapa_en:
                     leads.loc[mask,"fecha_entrada_etapa"] = now_date()
-                # rehidratar derivados
                 leads["etapa_mostrar"] = leads.apply(stage_value, axis=1)
                 save_csv(leads.drop(columns=[c for c in ["edad_num"] if c in leads.columns]), FILES["leads"])
-
                 st.success("Seguimiento registrado y lead actualizado.")
                 st.rerun()
 
@@ -855,4 +844,4 @@ elif menu == "✉️ Seguimiento":
 elif menu == "📊 Dashboard":
     page_dashboard()
 
-st.caption("Mini-CRM CVDR v12.4 • Todos pueden ver todos los leads (opción 'Solo mis leads' para filtrar). Edición/Alta, Seguimiento por fecha, Dashboard por etapas. Fechas robustas sin warnings.")
+st.caption("Mini-CRM CVDR v12.5 • Seguimiento con UNA sola 'Etapa' (normalizada). Fechas robustas, edición/alta y dashboard con descargas.")
