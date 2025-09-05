@@ -1,4 +1,3 @@
-from __future__ import annotations
 import re
 import pandas as pd
 import streamlit as st
@@ -11,7 +10,7 @@ from urllib.parse import quote_plus
 # =========================
 # CONFIG / PATHS
 # =========================
-st.set_page_config(page_title="Mini-CRM CVDR v12.3", layout="wide")
+st.set_page_config(page_title="Mini-CRM CVDR v12.4", layout="wide")
 BASE = (Path(__file__).resolve().parent / "data")
 BASE.mkdir(parents=True, exist_ok=True)
 FILES = {
@@ -26,17 +25,17 @@ def _hash(p: str) -> str:
     return hashlib.sha256((p or "").encode("utf-8")).hexdigest()
 
 # =========================
-# USUARIOS Y ROLES
+# USUARIOS
 # =========================
 DEFAULT_USER_ROWS = [
-    ["admin","Admin","Admin","ba26148e3bc77341163135d123a4dc26664ff0497da04c0b3e83218c97f70c45"],        
-    ["director","Director","Director","c34926c2783dca6cf34d1160ed5a04e1615cb813d3b5798efc29cc590cce4c91"],   
-    ["subidirector","Subidirector","Subidirector","58845944d08671209339de539469a100c8e9d6e17dcee9a447c7751937f7cb48"],  
-    ["favio","Favio","Ventas","e28ebb5d991f9ebbc5f2d26b199586e9bfb8fffd3b76dca200efd75eb68e999d"],          
-    ["nancy","Nancy","Ventas","64b1bce63509372952ad7191af86bddcb9939772404c236ff67b89d0442496d0"],          
-    ["rosario","Rosario","Ventas","706f42010b29d6376c768d717a19b49dc50b8b7133bffa1ae36d0fbbc32d59bc"],      
-    ["hayde","Hayde","Comunicación","6b90d996f7c98698cd95d0d86f1298dbb9df89df34f16136b259a4efcaba04d8"],    
-    ["nora","Nora","Comunicación","f54fd67046eeca39cd1f760730d3b48b1c00d383f0c5b9fa5ace0a7683a22058"],       
+    ["admin","Admin","Admin","ba26148e3bc77341163135d123a4dc26664ff0497da04c0b3e83218c97f70c45"],         # CVDR873
+    ["director","Director","Director","c34926c2783dca6cf34d1160ed5a04e1615cb813d3b5798efc29cc590cce4c91"],   # CVDR843
+    ["subidirector","Subidirector","Subidirector","58845944d08671209339de539469a100c8e9d6e17dcee9a447c7751937f7cb48"],  # CVDR52874
+    ["favio","Favio","Ventas","e28ebb5d991f9ebbc5f2d26b199586e9bfb8fffd3b76dca200efd75eb68e999d"],          # CVDR394
+    ["nancy","Nancy","Ventas","64b1bce63509372952ad7191af86bddcb9939772404c236ff67b89d0442496d0"],          # CVDR363
+    ["rosario","Rosario","Ventas","706f42010b29d6376c768d717a19b49dc50b8b7133bffa1ae36d0fbbc32d59bc"],       # CVDR434
+    ["hayde","Hayde","Comunicación","6b90d996f7c98698cd95d0d86f1298dbb9df89df34f16136b259a4efcaba04d8"],     # CVDR152
+    ["nora","Nora","Comunicación","f54fd67046eeca39cd1f760730d3b48b1c00d383f0c5b9fa5ace0a7683a22058"],       # CVDR192
 ]
 
 def ensure_or_update_users_csv():
@@ -70,10 +69,6 @@ def require_login():
 def owner_name_default() -> str:
     if not is_logged(): return "Asesor"
     return st.session_state["user"]["name"]
-def current_role() -> str:
-    return st.session_state["user"]["role"] if is_logged() else ""
-def is_manager_role(role: str) -> bool:
-    return role in {"Admin","Director","Subidirector"}
 
 # =========================
 # EMBUDO
@@ -88,8 +83,8 @@ STAGE_LABEL = {
 SPANISH_TO_EN = {
     "Captado":"Awareness","Contactado":"Contacted","Info enviada":"MQL","Info_enviada":"MQL","MQL":"MQL",
     "Interesado":"SQL","En seguimiento":"Nurturing","En_seguimiento":"Nurturing",
-    "Depósito":"Demo_Booked","Preinscripción":"Demo_Booked",
-    "Inscrito":"Won","Inscrita":"Won","Perdido":"Lost","Reactivado":"Re_Engaged",
+    "Depósito":"Demo_Booked","Preinscripción":"Demo_Booked","Inscrito":"Won","Inscrita":"Won",
+    "Perdido":"Lost","Reactivado":"Re_Engaged",
 }
 STAGE_COLORS = {
     "Awareness":("#F8FAFC","#0F172A"),"Contacted":("#EFF6FF","#075985"),"MQL":("#FEFCE8","#713F12"),
@@ -152,7 +147,7 @@ def save_csv(df: pd.DataFrame, path: str):
     p = Path(path); tmp = p.with_suffix(".tmp.csv")
     df.to_csv(tmp, index=False); tmp.replace(p); load_csv.clear()
 
-def ensure_columns(df: pd.DataFrame, ordered_cols: list[str], defaults: dict) -> pd.DataFrame:
+def ensure_columns(df: pd.DataFrame, ordered_cols: list, defaults: dict) -> pd.DataFrame:
     if df is None or df.empty: df = pd.DataFrame(columns=ordered_cols)
     for c in ordered_cols:
         if c not in df.columns: df[c] = defaults.get(c, "")
@@ -194,7 +189,7 @@ def parse_age_to_int(s: str, default: int = 0) -> int:
     return default
 
 def parse_date_smart(x):
-    """Primero intenta YYYY-MM-DD; si falla, vuelve a intentar con dayfirst=True."""
+    """Intenta YYYY-MM-DD; si falla, vuelve con dayfirst=True (sin warnings)."""
     if isinstance(x, pd.Series):
         s1 = pd.to_datetime(x, errors="coerce", format="%Y-%m-%d")
         if s1.isna().any():
@@ -540,7 +535,7 @@ def editar_lead_por_id(lead_edit_id: str):
             st.success("Lead actualizado."); st.rerun()
 
 # =========================
-# PÁGINA SEGUIMIENTO (fecha única + roles)
+# PÁGINA SEGUIMIENTO (fecha única + 'Solo mis leads' opcional)
 # =========================
 STAGE_TEMPLATES = {
     "Awareness":   {"tipo": "Bienvenida", "canal": "WhatsApp",
@@ -574,19 +569,10 @@ def page_followup():
     global leads, segs
     st.markdown("## ✉️ Seguimiento")
 
-    role = current_role()
-    can_view_all = is_manager_role(role)
-
     with st.expander("🎯 Filtros de acciones", expanded=True):
         dcol1, dcol2, dcol3 = st.columns([1.1,1.1,1.8])
         selected_date = dcol1.date_input("📅 Fecha (próxima acción)", value=date.today(), key="fu_date")
-        if can_view_all:
-            solo_mios = dcol1.checkbox("Solo mis leads", value=False, key="fu_only_mine")
-            solo_mios_disabled = False
-        else:
-            solo_mios = True
-            solo_mios_disabled = True
-            st.caption("Tu rol solo ve sus propios leads.")
+        solo_mios = dcol1.checkbox("Solo mis leads", value=False, key="fu_only_mine")
 
         etapas_disp = [s for s in STAGE_ORDER if s in leads["etapa_mostrar"].unique()]
         opticursos = sorted([c for c in leads.get("interes_curso","").unique() if str(c).strip()])
@@ -595,17 +581,19 @@ def page_followup():
 
         fil_stage = dcol2.multiselect("Etapa", etapas_disp, default=[])
         fil_curso = dcol2.multiselect("Curso", opticursos, default=[])
-        fil_owner = dcol3.multiselect("Owner", owners, default=[] if can_view_all else [owner_name_default()],
-                                      help="Como admin/director puedes ver todos; vendedores ven solo los suyos.")
+        # ✅ Evitar error: default SIEMPRE subset de owners
+        default_owners = []
+        my_owner = owner_name_default()
+        if solo_mios and my_owner in owners:
+            default_owners = [my_owner]
+        fil_owner = dcol3.multiselect("Owner", owners, default=default_owners,
+                                      help="Activa 'Solo mis leads' para auto-seleccionar tu nombre.")
         fil_funnel = dcol3.multiselect("Funnel etapas (CSV)", funnels, default=[])
         q = st.text_input("🔎 Buscar lead (nombre, correo o teléfono)", key="fu_search")
 
-        if solo_mios_disabled:
-            st.session_state["fu_only_mine"] = True
-
     base = leads.copy()
     if solo_mios:
-        base = base[base["owner"] == owner_name_default()]
+        base = base[base["owner"] == my_owner]
     if q:
         ql = q.lower()
         def _m(r):
@@ -867,4 +855,4 @@ elif menu == "✉️ Seguimiento":
 elif menu == "📊 Dashboard":
     page_dashboard()
 
-st.caption("Mini-CRM CVDR v12.3 • Seguimiento por fecha única con control por rol. Edición/Alta de leads. Dashboard por etapas claro + descargas. Fechas robustas sin warnings.")
+st.caption("Mini-CRM CVDR v12.4 • Todos pueden ver todos los leads (opción 'Solo mis leads' para filtrar). Edición/Alta, Seguimiento por fecha, Dashboard por etapas. Fechas robustas sin warnings.")
