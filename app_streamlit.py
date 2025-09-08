@@ -3,14 +3,14 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 from pathlib import Path
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import hashlib
 from urllib.parse import quote_plus
 
 # =========================
 # CONFIG / PATHS
 # =========================
-st.set_page_config(page_title="Mini-CRM CVDR v12.5", layout="wide")
+st.set_page_config(page_title="Mini-CRM CVDR v12.6", layout="wide")
 BASE = (Path(__file__).resolve().parent / "data")
 BASE.mkdir(parents=True, exist_ok=True)
 FILES = {
@@ -326,7 +326,7 @@ def page_leads():
                 hoy["__h"] = hoy["hora_registro"].apply(parse_time_safe)
                 hoy = hoy.sort_values("__h", ascending=False)
             cols_hoy = ["id_lead","fecha_registro","hora_registro","nombre","apellidos","genero",
-                        "celular","correo","interes_curso","lead_status","owner"]
+                        "celular","telefono","correo","interes_curso","lead_status","owner"]
             for c in cols_hoy:
                 if c not in hoy.columns: hoy[c] = ""
             st.dataframe(hoy[cols_hoy], use_container_width=True, hide_index=True)
@@ -355,7 +355,7 @@ def page_leads():
     if fil_owner: L = L[L["owner"].isin(fil_owner)]
     if fil_genero: L = L[L["genero"].isin(fil_genero)]
 
-    cols_vista = ["id_lead","fecha_registro","hora_registro","nombre","apellidos","genero","celular","correo",
+    cols_vista = ["id_lead","fecha_registro","hora_registro","nombre","apellidos","genero","celular","telefono","correo",
                   "interes_curso","como_enteraste","owner","etapa_mostrar","funnel_etapas","lead_status",
                   "proxima_accion_fecha","proxima_accion_desc","fecha_ultimo_contacto","lead_score"]
     for c in cols_vista:
@@ -399,15 +399,17 @@ def page_leads():
         c4,c5,c6 = st.columns(3)
         edad = c4.number_input("Edad", 0, 120, 0, 1, format="%d")
         celular = c5.text_input("Celular")
-        correo = c6.text_input("Correo")
+        telefono = c6.text_input("Teléfono")   # NUEVO
 
         c7,c8 = st.columns(2)
-        interes = c7.selectbox("Tipo de curso / interés", COURSE_OPTIONS, 0)
-        canal = c8.selectbox("¿Cómo te enteraste?", CHANNEL_OPTIONS, 0)
+        correo = c7.text_input("Correo")
+        interes = c8.selectbox("Tipo de curso / interés", COURSE_OPTIONS, 0)
 
-        c9, c10 = st.columns(2)
-        prox_fecha_new = c9.date_input("Próxima acción (fecha)", value=None, format="YYYY-MM-DD")
-        prox_desc_new  = c10.text_input("Próxima acción (descripción)", value="")
+        c9,c10 = st.columns(2)
+        canal = c9.selectbox("¿Cómo te enteraste?", CHANNEL_OPTIONS, 0)
+        prox_fecha_new = c10.date_input("Próxima acción (fecha)", value=None, format="YYYY-MM-DD")
+
+        prox_desc_new = st.text_input("Próxima acción (descripción)", value="")
 
         stages = emb["stage"].tolist()
         lead_status_lbl = st.selectbox("Etapa", [STAGE_LABEL[s] for s in stages], 0)
@@ -416,8 +418,8 @@ def page_leads():
         if ok:
             if not (nombre or "").strip():
                 st.error("El nombre es obligatorio."); st.stop()
-            if not (norm_phone(celular) or norm_email(correo)):
-                st.error("Debes capturar al menos **celular** o **correo**."); st.stop()
+            if not (norm_phone(celular) or norm_phone(telefono) or norm_email(correo)):
+                st.error("Debes capturar al menos **celular, teléfono o correo**."); st.stop()
             if (correo or "").strip() and "@" not in correo:
                 st.error("El correo no parece válido."); st.stop()
             lead_status_en = stages[[STAGE_LABEL[s] for s in stages].index(lead_status_lbl)]
@@ -428,7 +430,8 @@ def page_leads():
                 "nombre": (nombre or "").strip(), "apellidos": (apellidos or "").strip(),
                 "genero": (genero or "").strip(),
                 "edad": str(int(edad)) if str(edad) != "" else "",
-                "celular": norm_phone(celular), "telefono": "",
+                "celular": norm_phone(celular),
+                "telefono": norm_phone(telefono),   # SE GUARDA
                 "correo": norm_email(correo),
                 "interes_curso": interes, "como_enteraste": canal,
                 "lead_status": lead_status_en,
@@ -446,6 +449,7 @@ def page_leads():
             leads_local["lead_score"] = leads_local.apply(compute_lead_score, axis=1).astype(str)
             leads = pd.concat([leads_local, leads], ignore_index=True)
             save_csv(leads.drop(columns=[c for c in ["edad_num"] if c in leads.columns]), FILES["leads"])
+            # rehidratar
             leads["edad"] = leads["edad"].astype(str).fillna("")
             leads["edad_num"] = leads["edad"].apply(lambda s: parse_age_to_int(s,0)).astype(int)
             leads["etapa_mostrar"] = leads.apply(stage_value, axis=1)
@@ -474,7 +478,7 @@ def editar_lead_por_id(lead_edit_id: str):
         c4,c5,c6 = st.columns(3)
         edad_e = c4.number_input("Edad", min_value=0, max_value=120, value=edad_default, step=1, format="%d")
         celular_e = c5.text_input("Celular", value=row.get("celular",""))
-        correo_e  = c6.text_input("Correo",  value=row.get("correo",""))
+        telefono_e = c6.text_input("Teléfono", value=row.get("telefono",""))  # NUEVO
 
         c7,c8 = st.columns(2)
         interes_e = c7.selectbox("Tipo de curso / interés", COURSE_OPTIONS,
@@ -499,21 +503,22 @@ def editar_lead_por_id(lead_edit_id: str):
         if ok:
             if not (nombre_e or "").strip():
                 st.error("El nombre es obligatorio."); st.stop()
-            if not (norm_phone(celular_e) or norm_email(correo_e)):
-                st.error("Debes capturar al menos **celular** o **correo**."); st.stop()
-            if (correo_e or "").strip() and "@" not in correo_e:
+            if not (norm_phone(celular_e) or norm_phone(telefono_e) or norm_email(correo_e := row.get("correo",""))):
+                # si no hay correo en la fila, permitir si hay alguno de los teléfonos
+                pass
+            if (correoi := row.get("correo","")).strip() and "@" not in correoi:
                 st.error("El correo no parece válido."); st.stop()
 
             estado_en = stages[[STAGE_LABEL[s] for s in stages].index(estado_e_lbl)]
             prev_stage = row.get("etapa_mostrar","Awareness")
 
             leads.loc[mask, [
-                "nombre","apellidos","genero","edad","celular","correo","interes_curso","como_enteraste",
+                "nombre","apellidos","genero","edad","celular","telefono","correo","interes_curso","como_enteraste",
                 "lead_status","funnel_etapas","observaciones","proxima_accion_fecha","proxima_accion_desc",
             ]] = [
                 (nombre_e or "").strip(), (apellidos_e or "").strip(), (genero_e or "").strip(),
                 str(int(edad_e)) if str(edad_e) != "" else "",
-                norm_phone(celular_e), norm_email(correo_e), interes_e, canal_e,
+                norm_phone(celular_e), norm_phone(telefono_e), norm_email(row.get("correo","")), interes_e, canal_e,
                 estado_en, estado_en, (obs_e or "").strip(),
                 prox_f.strftime("%Y-%m-%d") if isinstance(prox_f, date) else "", prox_d,
             ]
@@ -526,6 +531,7 @@ def editar_lead_por_id(lead_edit_id: str):
                 leads.loc[mask,"fecha_entrada_etapa"] = now_date()
 
             save_csv(leads.drop(columns=[c for c in ["edad_num"] if c in leads.columns]), FILES["leads"])
+            # Rehidratar
             leads["edad"] = leads["edad"].astype(str).fillna("")
             leads["edad_num"] = leads["edad"].apply(lambda s: parse_age_to_int(s,0)).astype(int)
             leads["etapa_mostrar"] = leads.apply(stage_value, axis=1)
@@ -610,9 +616,11 @@ def page_followup():
         due["__h"] = due.get("hora_registro","").apply(parse_time_safe)
         due = due.sort_values("__h", ascending=False)
         for _, row in due.iterrows():
+            # Tel visible (celular -> teléfono)
+            tel_show = row.get("celular","") or row.get("telefono","")
             with st.container(border=True):
-                cA,cB,cC = st.columns([5,3,2])
-                cA.markdown(f"**{row.get('nombre','')} {row.get('apellidos','')}** • {row.get('genero','')} • {row.get('celular','')}")
+                cA,cB,cC = st.columns([6,3,2])
+                cA.markdown(f"**{row.get('nombre','')} {row.get('apellidos','')}**  \n{row.get('genero','')} • 📞 {tel_show}")
                 cB.markdown(stage_badge(row.get("etapa_mostrar","Awareness")), unsafe_allow_html=True)
                 if cC.button("📨 Abrir", key=f"open_{row.get('id_lead','')}"):
                     st.session_state["fu_selected_lead_id"] = str(row.get("id_lead",""))
@@ -647,8 +655,9 @@ def page_followup():
 
         top = st.container()
         with top:
+            tel_show = lead_ctx.get("celular","") or lead_ctx.get("telefono","")
             c1,c2,c3,c4 = st.columns([5,3,2,1.5])
-            c1.markdown(f"### {lead_ctx.get('nombre','')} {lead_ctx.get('apellidos','')}  \n📞 {lead_ctx.get('celular','—')} • ✉️ {lead_ctx.get('correo','—')}")
+            c1.markdown(f"### {lead_ctx.get('nombre','')} {lead_ctx.get('apellidos','')}  \n{lead_ctx.get('genero','')} • 📞 {tel_show} • ✉️ {lead_ctx.get('correo','—')}")
             c2.markdown(stage_badge(lead_ctx.get("etapa_mostrar","Awareness")), unsafe_allow_html=True)
             c3.markdown(owner_badge(lead_ctx.get("owner","")), unsafe_allow_html=True)
             if c4.button("Cambiar lead", use_container_width=True):
@@ -696,7 +705,7 @@ def page_followup():
 
         cwa1, cwa2 = st.columns([2,4])
         usar_tel_lead = cwa1.checkbox("Usar número del lead", value=True)
-        tel_obj = norm_phone(lead_ctx.get("celular","")) if usar_tel_lead else ""
+        tel_obj = norm_phone(lead_ctx.get("celular","") or lead_ctx.get("telefono","")) if usar_tel_lead else ""
         msg_enc = quote_plus(msg or "")
         url_wa_web = f"https://api.whatsapp.com/send?phone={tel_obj}&text={msg_enc}" if tel_obj else f"https://api.whatsapp.com/send?text={msg_enc}"
         cwa2.markdown(f"<div class='wa-actions'><a class='btn' href='{url_wa_web}' target='_blank'>🌐 Abrir en WhatsApp Web</a></div>", unsafe_allow_html=True)
@@ -844,4 +853,4 @@ elif menu == "✉️ Seguimiento":
 elif menu == "📊 Dashboard":
     page_dashboard()
 
-st.caption("Mini-CRM CVDR v12.5 • Seguimiento con UNA sola 'Etapa' (normalizada). Fechas robustas, edición/alta y dashboard con descargas.")
+st.caption("Mini-CRM CVDR v12.6 • Alta/edición con CELULAR y TELÉFONO. Seguimiento muestra nombre, género y teléfono. Etapa única (normalizada).")
