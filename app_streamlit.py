@@ -538,7 +538,7 @@ def page_seguimiento():
             intereses = str_to_list(row.get("interes_curso(puede sellecionar varios)",""))
             if intereses:
                 chips = " ".join([
-                    f"<span style='display:inline-block;padding:4px 10px;border-radius:999px;background:#eef2ff;margin:2px;font-size:12px'>{i}</span>"
+                    f"<span style='display:inline-block;padding:4px 10px;border-radius:999px;background:#f9c5d1;margin:2px;font-size:12px'>{i}</span>"
                     for i in intereses
                 ])
                 st.markdown(f"<div>📚 <strong>Interés en curso(s):</strong> {chips}</div>", unsafe_allow_html=True)
