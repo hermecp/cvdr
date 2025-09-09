@@ -139,9 +139,26 @@ def timestamp_pair():
     dt = datetime.now(); return dt.date().isoformat(), dt.strftime("%H:%M:%S")
 
 def parse_date_safe(s):
-    if s is None or str(s).strip() == "": return None
-    try: return pd.to_datetime(s).date()
-    except Exception: return None
+    """
+    Acepta ISO (YYYY-MM-DD), YYYY/MM/DD y dd/mm/YYYY o dd-mm-YYYY,
+    sin warnings. Devuelve date o None.
+    """
+    if s is None:
+        return None
+    s_str = str(s).strip()
+    if not s_str:
+        return None
+
+    # Intentos con formatos explícitos
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s_str, fmt).date()
+        except ValueError:
+            pass
+
+    # Fallback robusto: parser de pandas con dayfirst=True y control de NaT
+    ts = pd.to_datetime(s_str, dayfirst=True, errors="coerce")
+    return ts.date() if pd.notna(ts) else None
 
 def str_to_list(s: str) -> list[str]:
     if not s or pd.isna(s): return []
@@ -754,7 +771,7 @@ def page_login():
         if info:
             st.session_state.user = info
             st.success(f"Bienvenido, {info['name']} ({info['role']})")
-            st.experimental_rerun()
+            st.rerun()  # actualizado (antes: st.experimental_rerun)
         else:
             st.error("Usuario o contraseña incorrectos.")
 
@@ -766,7 +783,8 @@ else:
     with st.sidebar:
         st.markdown(f"**👤 {st.session_state.user['name']}**  \n`{st.session_state.user['role']}`")
         if st.button("Cerrar sesión", use_container_width=True):
-            logout(); st.experimental_rerun()
+            logout()
+            st.rerun()  # actualizado (antes: st.experimental_rerun)
         st.markdown("---")
         page = st.radio("Ir a:", ["🧑‍💼 Leads","🎯 Seguimiento","📊 Dashboard / Tablero"], index=0)
         st.caption("CSV: leads.csv • users.csv")
