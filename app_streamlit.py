@@ -1,31 +1,39 @@
-# streamlit_app.py
 # ──────────────────────────────────────────────────────────────────────────────
-# CRM de Leads (Streamlit) listo para la nube
-# - Login (selector de usuario + contraseña) con st.rerun()
-# - CSV auto-creados (users.csv / leads.csv)
-# - id_lead AUTOINCREMENTAL (continúa último ID numérico)
+# CRM de Leads (Streamlit) – listo para Streamlit Community Cloud
+# - Login por usuario+contraseña
 # - Leads: consultar / agregar / editar
 # - Seguimiento: Hoy / Por fecha / Todos (con filtro rápido)
-# - Historial UNIFICADO (opcional, en una sola tabla)
+# - Historial UNIFICADO opcional (tabla)
 # - Dashboard bilingüe (ES/EN) con gráficas y tablas
-# - Versiones compatibles con requirements.txt:
-#   streamlit==1.36.0, pandas==2.2.2, altair==5.3.0, pyarrow==16.1.0
+# - FIX: id_lead autoincremental continuo (L0001, L0002, …)
+# - Listo para la nube: .data/, FileLock, st.rerun()
 # ──────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
+import os
 import re
 import hashlib
 from pathlib import Path
 from datetime import datetime, date, timedelta
 
+from filelock import FileLock
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 # ===================== Config & Paths =====================
 st.set_page_config(page_title="CRM Leads", page_icon="🧑‍💼", layout="wide")
-DATA_PATH = Path("leads.csv")
-USERS_PATH = Path("users.csv")
+
+# Carpeta de datos local (escribible en Streamlit Cloud)
+DATA_DIR = Path(os.environ.get("STREAMLIT_DATA_DIR", ".data"))
+DATA_DIR.mkdir(exist_ok=True, parents=True)
+
+DATA_PATH = DATA_DIR / "leads.csv"
+USERS_PATH = DATA_DIR / "users.csv"
+FILELOCK_PATH = DATA_DIR / ".io.lock"
+
+# Altair: evitar límite de filas por defecto (útil en dashboards)
+alt.data_transformers.disable_max_rows()
 
 # ===================== Usuarios (default + helpers) =====================
 DEFAULT_USER_ROWS = [
@@ -44,15 +52,17 @@ def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 def ensure_users_csv():
-    if not USERS_PATH.exists():
-        pd.DataFrame(DEFAULT_USER_ROWS, columns=USER_COLUMNS).to_csv(USERS_PATH, index=False, encoding="utf-8")
-    else:
-        dfu = pd.read_csv(USERS_PATH, dtype=str).fillna("")
-        for c in USER_COLUMNS:
-            if c not in dfu.columns:
-                dfu[c] = ""
-        dfu = dfu[USER_COLUMNS]
-        dfu.to_csv(USERS_PATH, index=False, encoding="utf-8")
+    USERS_PATH.parent.mkdir(exist_ok=True, parents=True)
+    with FileLock(str(FILELOCK_PATH)):
+        if not USERS_PATH.exists():
+            pd.DataFrame(DEFAULT_USER_ROWS, columns=USER_COLUMNS).to_csv(USERS_PATH, index=False, encoding="utf-8")
+        else:
+            dfu = pd.read_csv(USERS_PATH, dtype=str).fillna("")
+            for c in USER_COLUMNS:
+                if c not in dfu.columns:
+                    dfu[c] = ""
+            dfu = dfu[USER_COLUMNS]
+            dfu.to_csv(USERS_PATH, index=False, encoding="utf-8")
 
 @st.cache_data(ttl=60)
 def load_users() -> pd.DataFrame:
@@ -141,18 +151,6 @@ def ts_now() -> str: return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 def timestamp_pair():
     dt = datetime.now(); return dt.date().isoformat(), dt.strftime("%H:%M:%S")
 
-def next_lead_id(df: pd.DataFrame) -> str:
-    """ID autoincremental basado en el máximo numérico existente."""
-    if df is None or df.empty or "id_lead" not in df.columns:
-        return "1"
-    try:
-        nums = pd.to_numeric(df["id_lead"], errors="coerce")
-        mx = int(nums.max()) if pd.notna(nums.max()) else 0
-        return str(mx + 1)
-    except Exception:
-        # fallback robusto
-        return "1"
-
 def parse_date_safe(s):
     if s is None or str(s).strip() == "": return None
     try: return pd.to_datetime(s).date()
@@ -166,20 +164,22 @@ def list_to_str(vals: list[str]) -> str:
     return " | ".join([v for v in vals if v])
 
 # ===================== IO CSV Leads =====================
-def ensure_leads_csv():
-    if not DATA_PATH.exists():
-        pd.DataFrame(columns=COLUMNS_BASE + COLUMNS_EXTRA).to_csv(DATA_PATH, index=False, encoding="utf-8")
-    else:
-        df = pd.read_csv(DATA_PATH, dtype=str).fillna("")
-        for c in COLUMNS_BASE + COLUMNS_EXTRA:
-            if c not in df.columns:
-                df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
-        df = df[COLUMNS_BASE + COLUMNS_EXTRA]
-        df.to_csv(DATA_PATH, index=False, encoding="utf-8")
+def ensure_csv():
+    DATA_PATH.parent.mkdir(exist_ok=True, parents=True)
+    with FileLock(str(FILELOCK_PATH)):
+        if not DATA_PATH.exists():
+            pd.DataFrame(columns=COLUMNS_BASE + COLUMNS_EXTRA).to_csv(DATA_PATH, index=False, encoding="utf-8")
+        else:
+            df = pd.read_csv(DATA_PATH, dtype=str).fillna("")
+            for c in COLUMNS_BASE + COLUMNS_EXTRA:
+                if c not in df.columns:
+                    df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
+            df = df[COLUMNS_BASE + COLUMNS_EXTRA]
+            df.to_csv(DATA_PATH, index=False, encoding="utf-8")
 
 @st.cache_data(ttl=10)
 def load_data() -> pd.DataFrame:
-    ensure_leads_csv()
+    ensure_csv()
     return pd.read_csv(DATA_PATH, dtype=str).fillna("")
 
 def save_data(df: pd.DataFrame):
@@ -187,8 +187,29 @@ def save_data(df: pd.DataFrame):
         if c not in df.columns:
             df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
     df = df[COLUMNS_BASE + COLUMNS_EXTRA].copy().fillna("")
-    df.to_csv(DATA_PATH, index=False, encoding="utf-8")
+    with FileLock(str(FILELOCK_PATH)):
+        df.to_csv(DATA_PATH, index=False, encoding="utf-8")
     load_data.clear()
+
+# ---------- ID autoincremental ----------
+def next_lead_id(df: pd.DataFrame) -> str:
+    """
+    Genera el siguiente id_lead tipo L0001… tomando el mayor número
+    encontrado al final del id_lead actual (si no hay, empieza en 1).
+    """
+    if df.empty:
+        return "L0001"
+    ids = df["id_lead"].astype(str).tolist()
+    nums = []
+    for s in ids:
+        m = re.search(r"(\d+)$", s)
+        if m:
+            try:
+                nums.append(int(m.group(1)))
+            except:
+                pass
+    n = (max(nums) + 1) if nums else (len(ids) + 1)
+    return f"L{n:04d}"
 
 # ===================== Lógica de estado/orden =====================
 def etapa_is_won(etapa: str) -> bool:
@@ -367,6 +388,10 @@ def page_leads():
         st.subheader("➕ Agregar")
         df = load_data()
         with st.form("form_new"):
+            ctop = st.columns([1,1,1,1])
+            with ctop[0]:
+                # Mostrar el siguiente ID que se asignará
+                st.caption(f"Siguiente ID asignado: **{next_lead_id(df)}**")
             c1,c2,c3,c4 = st.columns(4)
             nombre = c1.text_input("👤 Nombre / alias")
             apellidos = c2.text_input("👥 Apellidos")
@@ -429,7 +454,7 @@ def page_leads():
             interes_vals = [v for v in str_to_list(rec.get("interes_curso(puede sellecionar varios)","")) if v in CAT_CURSOS]
             interes = st.multiselect("📚 Interés en curso(s)", options=CAT_CURSOS, default=interes_vals)
             c8,c9 = st.columns(2)
-            como_actual = rec.get("como_enteraste","") or CAT_CURSOS[0]
+            como_actual = rec.get("como_enteraste","") or CAT_COMO[0]
             opciones_ed = [como_actual] + [x for x in CAT_COMO if x != como_actual]
             como = c8.selectbox("🧭 ¿Cómo se enteraste?", opciones_ed, index=0)
             if como == "Otro":
@@ -480,6 +505,7 @@ def page_seguimiento():
     fecha_sel = st.date_input("Selecciona fecha", value=today()) if vista=="Por fecha" else None
     df = filter_by_mode(base_all, vista, fecha_sel)
 
+    # Buscador sencillo para "Todos"
     if vista == "Todos":
         qlist = st.text_input("Filtro rápido (nombre / correo / teléfono):").strip().lower()
         if qlist:
@@ -586,7 +612,7 @@ def page_seguimiento():
                 else:
                     st.dataframe(dfh, use_container_width=True, height=520)
 
-# ---------- Dashboard ----------
+# ---------- Dashboard (ES/EN) ----------
 def _explode_intereses(df):
     if df.empty: return df.iloc[0:0].copy()
     tmp = df[["id_lead","interes_curso(puede sellecionar varios)"]].copy()
@@ -601,7 +627,8 @@ def _bar(df, x, y, color_field=None, domain=None, range_colors=None, title="", h
     return alt.Chart(df).mark_bar().encode(**enc).properties(height=h, title=title)
 
 def page_dashboard():
-    st.title("📊 Dashboard")
+    st.title("📊 Dashboard / Tablero")
+
     df = enrich(load_data())
     if df.empty:
         st.info("No hay datos.")
@@ -617,9 +644,13 @@ def page_dashboard():
     prom_att = pd.to_numeric(df["total_atenciones"].replace("", "0")).mean().round(2)
 
     c1,c2,c3,c4,c5,c6 = st.columns(6)
-    c1.metric("👥 Leads / Total", total); c2.metric("✅ Won (Ganado)", won); c3.metric("🟡 In progress (En curso)", in_prog)
-    c4.metric("🔴 Lost (Perdido)", lost); c5.metric("📅 Due today (Hoy)", hoy); c6.metric("⏰ Overdue (Vencido)", venc)
-    st.caption(f"📭 Without next action: {sinp} • 🧮 Avg. touches/lead: {prom_att}")
+    c1.metric("👥 Leads (Total)", total)
+    c2.metric("✅ Ganados (Won)", won)
+    c3.metric("🟡 En curso (In progress)", in_prog)
+    c4.metric("🔴 Perdidos (Lost)", lost)
+    c5.metric("📅 Vencen hoy (Due today)", hoy)
+    c6.metric("⏰ Atrasados (Overdue)", venc)
+    st.caption(f"📭 Sin próxima acción (Without next action): {sinp} • 🧮 Promedio de atenciones/lead (Avg. touches/lead): {prom_att}")
     st.markdown("---")
 
     etapas = df["funnel_etapas"].replace("", "Contacted (Contactado)").replace({
@@ -648,28 +679,28 @@ def page_dashboard():
     a,b,c = st.columns(3)
 
     reg = df30.groupby("_reg")["id_lead"].count().reset_index()
-    a.subheader("🗓️ New leads (30d)")
+    a.subheader("🗓️ Leads nuevos (30 días) / New leads (30d)")
     if not reg.empty:
         ch_reg = alt.Chart(reg).mark_line(point=True).encode(x="_reg:T", y="id_lead:Q").properties(height=200)
         a.altair_chart(ch_reg, use_container_width=True)
     else:
-        a.info("No data")
+        a.info("Sin datos / No data")
 
     prox = df.dropna(subset=["_prox"]).groupby("_prox")["id_lead"].count().reset_index()
-    b.subheader("📅 Next actions")
+    b.subheader("📅 Próximas acciones / Next actions")
     if not prox.empty:
         ch_prox = _bar(prox,"_prox:T","id_lead:Q", title="")
         b.altair_chart(ch_prox, use_container_width=True)
     else:
-        b.info("No data")
+        b.info("Sin datos / No data")
 
     canal = df["como_enteraste"].replace("", "No indicado").value_counts().rename_axis("channel").reset_index(name="qty")
-    c.subheader("🧭 Acquisition channels")
+    c.subheader("🧭 Canales de adquisición / Acquisition channels")
     if not canal.empty:
         ch_canal = _bar(canal,"channel:N","qty:Q", title="")
         c.altair_chart(ch_canal, use_container_width=True)
     else:
-        c.info("No data")
+        c.info("Sin datos / No data")
 
     st.markdown("---")
 
@@ -677,14 +708,14 @@ def page_dashboard():
     users = (pd.DataFrame({"user": df["atendido_por"].replace("", "Sin asignar"),
                            "touches": pd.to_numeric(df["total_atenciones"].replace("", "0"))})
              .groupby("user", dropna=False)["touches"].sum().sort_values(ascending=False).reset_index())
-    d.subheader("👨‍💼 Touches by owner (Por responsable)")
+    d.subheader("👨‍💼 Atenciones por responsable / Touches by owner")
     if not users.empty:
         ch_users = _bar(users,"user:N","touches:Q", title="")
         d.altair_chart(ch_users, use_container_width=True)
     else:
-        d.info("No data")
+        d.info("Sin datos / No data")
 
-    e.subheader("📈 Weekly conversion (Conversión semanal)")
+    e.subheader("📈 Conversión semanal / Weekly conversion")
     if not df30.empty:
         conv = df30.assign(week=df30["_reg"].apply(lambda d: pd.to_datetime(d).to_period("W").start_time))
         conv = conv.groupby("week").apply(
@@ -695,42 +726,42 @@ def page_dashboard():
         ).properties(height=200)
         e.altair_chart(ch_conv, use_container_width=True)
     else:
-        e.info("No recent data")
+        e.info("Sin datos / No recent data")
 
     inter = _explode_intereses(df)
-    f.subheader("📚 Interests (Top)")
+    f.subheader("📚 Intereses (Top) / Interests (Top)")
     if not inter.empty:
         top = inter["interes"].value_counts().rename_axis("interest").reset_index(name="qty")
         ch_inter = _bar(top, "interest:N", "qty:Q", title="")
         f.altair_chart(ch_inter, use_container_width=True)
     else:
-        f.info("No interests")
+        f.info("Sin datos / No data")
 
     st.markdown("---")
 
     t1,t2 = st.columns(2)
     etapas_tbl = etapas.copy(); etapas_tbl["color_hex"] = etapas_tbl["stage"].map(STAGE_COLORS).fillna("#999")
-    t1.markdown("**By funnel stage (Por etapa)**"); t1.dataframe(etapas_tbl, use_container_width=True, height=240)
+    t1.markdown("**Por etapa (By stage)**"); t1.dataframe(etapas_tbl, use_container_width=True, height=240)
     resp_tbl = df["atendido_por"].replace("","Sin asignar").value_counts().rename_axis("owner").reset_index(name="qty")
-    t2.markdown("**By owner (Por responsable)**"); t2.dataframe(resp_tbl, use_container_width=True, height=240)
+    t2.markdown("**Por responsable (By owner)**"); t2.dataframe(resp_tbl, use_container_width=True, height=240)
 
     t3,t4 = st.columns(2)
-    t3.markdown("**By channel (Por canal)**"); t3.dataframe(canal, use_container_width=True, height=240)
-    sla_tbl = pd.DataFrame({"Metric":["Due today","Overdue","No next action"],
-                            "Qty":[int(hoy), int(venc), int(sinp)]})
-    t4.markdown("**SLA next actions**"); t4.dataframe(sla_tbl, use_container_width=True, height=240)
+    t3.markdown("**Por canal (By channel)**"); t3.dataframe(canal, use_container_width=True, height=240)
+    sla_tbl = pd.DataFrame({"Métrica / Metric":["Vencen hoy / Due today","Atrasados / Overdue","Sin próxima acción / No next action"],
+                            "Cantidad / Qty":[int(hoy), int(venc), int(sinp)]})
+    t4.markdown("**SLA de próximas acciones / Next actions SLA**"); t4.dataframe(sla_tbl, use_container_width=True, height=240)
 
-    st.markdown("**Overall conversion (Conversión general)**")
-    conv_gen = pd.DataFrame({"Total":[total],"Won":[won],"Lost":[lost],"In progress":[in_prog],
-                             "Conversion rate":[round(won/max(total,1),3)]})
+    st.markdown("**Conversión general / Overall conversion**")
+    conv_gen = pd.DataFrame({"Total":[total],"Ganados / Won":[won],"Perdidos / Lost":[lost],"En curso / In progress":[in_prog],
+                             "Tasa de conversión / Conversion rate":[round(won/max(total,1),3)]})
     st.dataframe(conv_gen, use_container_width=True, height=120)
 
 # ===================== Login Page (usuario + password) =====================
 def page_login():
     st.title("🔐 Inicio de sesión")
-    users_df = load_users()
+
     with st.form("login_form", clear_on_submit=False):
-        u = st.selectbox("Usuario", users_df["username"].tolist(), index=0)
+        u = st.text_input("Usuario", placeholder="ej. favio")
         p = st.text_input("Contraseña", type="password", placeholder="•••••••")
         ok = st.form_submit_button("Ingresar", use_container_width=True)
 
@@ -745,8 +776,6 @@ def page_login():
 
 # ===================== Router con sesión =====================
 ensure_users_csv()
-ensure_leads_csv()
-
 if "user" not in st.session_state:
     page_login()
 else:
@@ -755,8 +784,8 @@ else:
         if st.button("Cerrar sesión", use_container_width=True):
             logout(); st.rerun()
         st.markdown("---")
-        page = st.radio("Ir a:", ["🧑‍💼 Leads","🎯 Seguimiento","📊 Dashboard"], index=0)
-        st.caption("CSV: leads.csv • users.csv")
+        page = st.radio("Ir a:", ["🧑‍💼 Leads","🎯 Seguimiento","📊 Dashboard / Tablero"], index=0)
+        st.caption("CSV en: .data/leads.csv • .data/users.csv")
 
     if page.startswith("🧑‍💼"):
         page_leads()
