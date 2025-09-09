@@ -1,43 +1,28 @@
+# app.py
 # ──────────────────────────────────────────────────────────────────────────────
-# CRM de Leads (Streamlit) – listo para Streamlit Community Cloud
+# CRM de Leads (Streamlit)
 # - Login por usuario+contraseña
 # - Leads: consultar / agregar / editar
 # - Seguimiento: Hoy / Por fecha / Todos (con filtro rápido)
 # - Historial UNIFICADO opcional (tabla)
 # - Dashboard bilingüe (ES/EN) con gráficas y tablas
-# - ID autoincremental continuo (L0001, L0002, …)
-# - Persistencia en .data/ (escribible en Cloud) + semilla desde raíz si existen CSV
-# - Importador de CSVs desde el sidebar
+# - FIX: id_lead autoincremental continuo (L0001, L0002, …)
 # ──────────────────────────────────────────────────────────────────────────────
+
 from __future__ import annotations
-import os
 import re
 import hashlib
 from pathlib import Path
 from datetime import datetime, date, timedelta
 
-from filelock import FileLock
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 # ===================== Config & Paths =====================
 st.set_page_config(page_title="CRM Leads", page_icon="🧑‍💼", layout="wide")
-
-# Carpeta de datos local (escribible en Streamlit Cloud)
-DATA_DIR = Path(os.environ.get("STREAMLIT_DATA_DIR", ".data"))
-DATA_DIR.mkdir(exist_ok=True, parents=True)
-
-DATA_PATH = DATA_DIR / "leads.csv"
-USERS_PATH = DATA_DIR / "users.csv"
-FILELOCK_PATH = DATA_DIR / ".io.lock"
-
-# CSV semilla en la raíz del repo (si existen)
-SEED_LEADS = Path("leads.csv")
-SEED_USERS = Path("users.csv")
-
-# Altair: evitar límite de filas por defecto (útil en dashboards)
-alt.data_transformers.disable_max_rows()
+DATA_PATH = Path("leads.csv")
+USERS_PATH = Path("users.csv")
 
 # ===================== Usuarios (default + helpers) =====================
 DEFAULT_USER_ROWS = [
@@ -56,20 +41,15 @@ def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 def ensure_users_csv():
-    USERS_PATH.parent.mkdir(exist_ok=True, parents=True)
-    with FileLock(str(FILELOCK_PATH)):
-        # Semilla desde raíz si existe users.csv
-        if (not USERS_PATH.exists()) and SEED_USERS.exists():
-            USERS_PATH.write_bytes(SEED_USERS.read_bytes())
-        if not USERS_PATH.exists():
-            pd.DataFrame(DEFAULT_USER_ROWS, columns=USER_COLUMNS).to_csv(USERS_PATH, index=False, encoding="utf-8")
-        else:
-            dfu = pd.read_csv(USERS_PATH, dtype=str).fillna("")
-            for c in USER_COLUMNS:
-                if c not in dfu.columns:
-                    dfu[c] = ""
-            dfu = dfu[USER_COLUMNS]
-            dfu.to_csv(USERS_PATH, index=False, encoding="utf-8")
+    if not USERS_PATH.exists():
+        pd.DataFrame(DEFAULT_USER_ROWS, columns=USER_COLUMNS).to_csv(USERS_PATH, index=False, encoding="utf-8")
+    else:
+        dfu = pd.read_csv(USERS_PATH, dtype=str).fillna("")
+        for c in USER_COLUMNS:
+            if c not in dfu.columns:
+                dfu[c] = ""
+        dfu = dfu[USER_COLUMNS]
+        dfu.to_csv(USERS_PATH, index=False, encoding="utf-8")
 
 @st.cache_data(ttl=60)
 def load_users() -> pd.DataFrame:
@@ -108,6 +88,7 @@ CAT_COMO = [
     "Recomendación","Volante/Impreso","Evento/Conferencia","Otro",
 ]
 
+# Embudo (solo para 🟡) — inglés (español)
 FUNNEL_YELLOW = [
     "Follow-up (Seguimiento)",
     "Materials (Materiales/flyer/videos)",
@@ -171,20 +152,15 @@ def list_to_str(vals: list[str]) -> str:
 
 # ===================== IO CSV Leads =====================
 def ensure_csv():
-    DATA_PATH.parent.mkdir(exist_ok=True, parents=True)
-    with FileLock(str(FILELOCK_PATH)):
-        # Semilla desde raíz si existe leads.csv
-        if (not DATA_PATH.exists()) and SEED_LEADS.exists():
-            DATA_PATH.write_bytes(SEED_LEADS.read_bytes())
-        if not DATA_PATH.exists():
-            pd.DataFrame(columns=COLUMNS_BASE + COLUMNS_EXTRA).to_csv(DATA_PATH, index=False, encoding="utf-8")
-        else:
-            df = pd.read_csv(DATA_PATH, dtype=str).fillna("")
-            for c in COLUMNS_BASE + COLUMNS_EXTRA:
-                if c not in df.columns:
-                    df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
-            df = df[COLUMNS_BASE + COLUMNS_EXTRA]
-            df.to_csv(DATA_PATH, index=False, encoding="utf-8")
+    if not DATA_PATH.exists():
+        pd.DataFrame(columns=COLUMNS_BASE + COLUMNS_EXTRA).to_csv(DATA_PATH, index=False, encoding="utf-8")
+    else:
+        df = pd.read_csv(DATA_PATH, dtype=str).fillna("")
+        for c in COLUMNS_BASE + COLUMNS_EXTRA:
+            if c not in df.columns:
+                df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
+        df = df[COLUMNS_BASE + COLUMNS_EXTRA]
+        df.to_csv(DATA_PATH, index=False, encoding="utf-8")
 
 @st.cache_data(ttl=10)
 def load_data() -> pd.DataFrame:
@@ -196,12 +172,15 @@ def save_data(df: pd.DataFrame):
         if c not in df.columns:
             df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
     df = df[COLUMNS_BASE + COLUMNS_EXTRA].copy().fillna("")
-    with FileLock(str(FILELOCK_PATH)):
-        df.to_csv(DATA_PATH, index=False, encoding="utf-8")
+    df.to_csv(DATA_PATH, index=False, encoding="utf-8")
     load_data.clear()
 
 # ---------- ID autoincremental ----------
 def next_lead_id(df: pd.DataFrame) -> str:
+    """
+    Genera el siguiente id_lead tipo L0001… tomando el mayor número
+    encontrado al final del id_lead actual (si no hay, empieza en 1).
+    """
     if df.empty:
         return "L0001"
     ids = df["id_lead"].astype(str).tolist()
@@ -395,6 +374,7 @@ def page_leads():
         with st.form("form_new"):
             ctop = st.columns([1,1,1,1])
             with ctop[0]:
+                # Mostrar el siguiente ID que se asignará
                 st.caption(f"Siguiente ID asignado: **{next_lead_id(df)}**")
             c1,c2,c3,c4 = st.columns(4)
             nombre = c1.text_input("👤 Nombre / alias")
@@ -416,7 +396,7 @@ def page_leads():
             ok = st.form_submit_button("Guardar")
 
         if ok:
-            fid = next_lead_id(df)
+            fid = next_lead_id(df)  # ← AUTOINCREMENTAL
             f_fecha, f_hora = timestamp_pair()
             row = {
                 "id_lead": fid, "fecha_registro": f_fecha, "hora_registro": f_hora,
@@ -509,6 +489,7 @@ def page_seguimiento():
     fecha_sel = st.date_input("Selecciona fecha", value=today()) if vista=="Por fecha" else None
     df = filter_by_mode(base_all, vista, fecha_sel)
 
+    # Buscador sencillo para "Todos"
     if vista == "Todos":
         qlist = st.text_input("Filtro rápido (nombre / correo / teléfono):").strip().lower()
         if qlist:
@@ -773,58 +754,23 @@ def page_login():
         if info:
             st.session_state.user = info
             st.success(f"Bienvenido, {info['name']} ({info['role']})")
-            st.rerun()
+            st.experimental_rerun()
         else:
             st.error("Usuario o contraseña incorrectos.")
 
-# ===================== Sidebar: sesión, navegación e importador =====================
-def sidebar_common():
-    with st.sidebar:
-        if "user" in st.session_state:
-            st.markdown(f"**👤 {st.session_state.user['name']}**  \n`{st.session_state.user['role']}`")
-            if st.button("Cerrar sesión", use_container_width=True):
-                logout(); st.rerun()
-        st.markdown("---")
-        st.caption("CSV en: `.data/leads.csv` • `.data/users.csv`")
-
-        st.markdown("### Importar CSV")
-        up_leads = st.file_uploader("leads.csv", type=["csv"], key="up_leads")
-        if up_leads is not None:
-            try:
-                dfL = pd.read_csv(up_leads, dtype=str).fillna("")
-                save_data(dfL)
-                st.success("✅ leads.csv importado en .data/")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al importar leads.csv: {e}")
-
-        up_users = st.file_uploader("users.csv", type=["csv"], key="up_users")
-        if up_users is not None:
-            try:
-                dfU = pd.read_csv(up_users, dtype=str).fillna("")
-                for c in USER_COLUMNS:
-                    if c not in dfU.columns: dfU[c] = ""
-                dfU = dfU[USER_COLUMNS]
-                with FileLock(str(FILELOCK_PATH)):
-                    dfU.to_csv(USERS_PATH, index=False, encoding="utf-8")
-                load_users.clear()
-                st.success("✅ users.csv importado en .data/")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al importar users.csv: {e}")
-
-        st.markdown("---")
-        page = st.radio("Ir a:", ["🧑‍💼 Leads","🎯 Seguimiento","📊 Dashboard / Tablero"], index=0)
-    return page
-
 # ===================== Router con sesión =====================
 ensure_users_csv()
-page = None
 if "user" not in st.session_state:
-    sidebar_common()
     page_login()
 else:
-    page = sidebar_common()
+    with st.sidebar:
+        st.markdown(f"**👤 {st.session_state.user['name']}**  \n`{st.session_state.user['role']}`")
+        if st.button("Cerrar sesión", use_container_width=True):
+            logout(); st.experimental_rerun()
+        st.markdown("---")
+        page = st.radio("Ir a:", ["🧑‍💼 Leads","🎯 Seguimiento","📊 Dashboard / Tablero"], index=0)
+        st.caption("CSV: leads.csv • users.csv")
+
     if page.startswith("🧑‍💼"):
         page_leads()
     elif page.startswith("🎯"):
