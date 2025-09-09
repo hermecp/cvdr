@@ -7,6 +7,7 @@
 # - Historial UNIFICADO opcional (tabla)
 # - Dashboard bilingüe (ES/EN) con gráficas y tablas
 # - FIX: id_lead autoincremental continuo (L0001, L0002, …)
+# - FIX: celular/teléfono se guardan y buscan sin espacios
 # ──────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
@@ -167,6 +168,12 @@ def str_to_list(s: str) -> list[str]:
 def list_to_str(vals: list[str]) -> str:
     return " | ".join([v for v in vals if v])
 
+def clean_space_only(s: str) -> str:
+    """Quita únicamente espacios en blanco de la cadena (teléfonos), conservando signos y dígitos."""
+    if s is None:
+        return ""
+    return re.sub(r"\s+", "", str(s))
+
 # ===================== IO CSV Leads =====================
 def ensure_csv():
     if not DATA_PATH.exists():
@@ -290,9 +297,21 @@ def ui_filtros(df: pd.DataFrame) -> pd.DataFrame:
     st.session_state.filters = {"q":q,"resp":rp,"color_idx":opt.index(col)}
 
     if q:
-        df = df[df.apply(lambda r: any(
-            q in str(r.get(k,"")).lower() for k in ["nombre/alias","apellidos","correo","celular","telefono"]
-        ), axis=1)]
+        q_norm = q.replace(" ", "")
+        def _match_row(r):
+            campos_texto = [
+                str(r.get("nombre/alias","")).lower(),
+                str(r.get("apellidos","")).lower(),
+                str(r.get("correo","")).lower(),
+            ]
+            cel_norm = clean_space_only(str(r.get("celular",""))).lower()
+            tel_norm = clean_space_only(str(r.get("telefono",""))).lower()
+            return (
+                any(q in campo for campo in campos_texto) or
+                (q_norm and (q_norm in cel_norm or q_norm in tel_norm))
+            )
+        df = df[df.apply(_match_row, axis=1)]
+
     if rp: df = df[df["atendido_por"].str.lower().str.contains(rp, na=False)]
     if col != "(Todos)": df = df[df["estado_color"] == col.split(" ")[0]]
     return df
@@ -418,7 +437,10 @@ def page_leads():
             row = {
                 "id_lead": fid, "fecha_registro": f_fecha, "hora_registro": f_hora,
                 "nombre/alias": nombre, "apellidos": apellidos, "genero": genero, "edad": str(edad).strip(),
-                "celular": celular, "telefono": telefono, "correo": correo,
+                # >>> Guardar teléfonos SIN espacios
+                "celular": clean_space_only(celular),
+                "telefono": clean_space_only(telefono),
+                "correo": correo,
                 "interes_curso(puede sellecionar varios)": list_to_str(interes),
                 "como_enteraste": como, "funnel_etapas": "Follow-up (Seguimiento)",
                 "fecha_ultimo_contacto": f_fecha, "observaciones": "",
@@ -471,7 +493,10 @@ def page_leads():
             idx = df.index[df["id_lead"].astype(str) == sel_id][0]
             updates = {
                 "nombre/alias":nombre,"apellidos":apellidos,"genero":genero,"edad":str(edad).strip(),
-                "celular":celular,"telefono":telefono,"correo":correo,
+                # >>> Guardar teléfonos SIN espacios
+                "celular": clean_space_only(celular),
+                "telefono": clean_space_only(telefono),
+                "correo":correo,
                 "interes_curso(puede sellecionar varios)": list_to_str(interes),
                 "como_enteraste":como,
                 "atendido_por":atendido_por_name,
@@ -506,13 +531,24 @@ def page_seguimiento():
     fecha_sel = st.date_input("Selecciona fecha", value=today()) if vista=="Por fecha" else None
     df = filter_by_mode(base_all, vista, fecha_sel)
 
-    # Buscador sencillo para "Todos"
+    # Buscador sencillo para "Todos" (ignora espacios en teléfonos)
     if vista == "Todos":
         qlist = st.text_input("Filtro rápido (nombre / correo / teléfono):").strip().lower()
         if qlist:
-            df = df[df.apply(lambda r: any(
-                qlist in str(r.get(k,"")).lower() for k in ["nombre/alias","apellidos","correo","celular","telefono"]
-            ), axis=1)]
+            q_norm = qlist.replace(" ", "")
+            def _match_row_fast(r):
+                campos_texto = [
+                    str(r.get("nombre/alias","")).lower(),
+                    str(r.get("apellidos","")).lower(),
+                    str(r.get("correo","")).lower(),
+                ]
+                cel_norm = clean_space_only(str(r.get("celular",""))).lower()
+                tel_norm = clean_space_only(str(r.get("telefono",""))).lower()
+                return (
+                    any(qlist in campo for campo in campos_texto) or
+                    (q_norm and (q_norm in cel_norm or q_norm in tel_norm))
+                )
+            df = df[df.apply(_match_row_fast, axis=1)]
 
     left, right = st.columns([1,2], gap="large")
     with left:
@@ -761,7 +797,7 @@ def page_dashboard():
 
     t3,t4 = st.columns(2)
     t3.markdown("**Por canal (By channel)**"); t3.dataframe(canal, use_container_width=True, height=240)
-    sla_tbl = pd.DataFrame({"Métrica / Metric":["Vencen hoy / Due today","Atrasados / Overdue","Sin próxima acción / No next action"],
+    sla_tbl = pd.DataFrame({"Métrica / Metric":["Vencen hoy / Due today","Atrasados (Overdue)","Sin próxima acción / No next action"],
                             "Cantidad / Qty":[int(hoy), int(venc), int(sinp)]})
     t4.markdown("**SLA de próximas acciones / Next actions SLA**"); t4.dataframe(sla_tbl, use_container_width=True, height=240)
 
