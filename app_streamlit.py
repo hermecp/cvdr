@@ -1,5 +1,13 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # CRM de Leads (Streamlit) – listo para Streamlit Community Cloud
+# - Login por usuario+contraseña
+# - Leads: consultar / agregar / editar
+# - Seguimiento: Hoy / Por fecha / Todos (con filtro rápido)
+# - Historial UNIFICADO opcional (tabla)
+# - Dashboard bilingüe (ES/EN) con gráficas y tablas
+# - ID autoincremental continuo (L0001, L0002, …)
+# - Persistencia en .data/ (escribible en Cloud) + semilla desde raíz si existen CSV
+# - Importador de CSVs desde el sidebar
 # ──────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 import os
@@ -24,6 +32,10 @@ DATA_PATH = DATA_DIR / "leads.csv"
 USERS_PATH = DATA_DIR / "users.csv"
 FILELOCK_PATH = DATA_DIR / ".io.lock"
 
+# CSV semilla en la raíz del repo (si existen)
+SEED_LEADS = Path("leads.csv")
+SEED_USERS = Path("users.csv")
+
 # Altair: evitar límite de filas por defecto (útil en dashboards)
 alt.data_transformers.disable_max_rows()
 
@@ -46,6 +58,9 @@ def sha256_hex(s: str) -> str:
 def ensure_users_csv():
     USERS_PATH.parent.mkdir(exist_ok=True, parents=True)
     with FileLock(str(FILELOCK_PATH)):
+        # Semilla desde raíz si existe users.csv
+        if (not USERS_PATH.exists()) and SEED_USERS.exists():
+            USERS_PATH.write_bytes(SEED_USERS.read_bytes())
         if not USERS_PATH.exists():
             pd.DataFrame(DEFAULT_USER_ROWS, columns=USER_COLUMNS).to_csv(USERS_PATH, index=False, encoding="utf-8")
         else:
@@ -158,6 +173,9 @@ def list_to_str(vals: list[str]) -> str:
 def ensure_csv():
     DATA_PATH.parent.mkdir(exist_ok=True, parents=True)
     with FileLock(str(FILELOCK_PATH)):
+        # Semilla desde raíz si existe leads.csv
+        if (not DATA_PATH.exists()) and SEED_LEADS.exists():
+            DATA_PATH.write_bytes(SEED_LEADS.read_bytes())
         if not DATA_PATH.exists():
             pd.DataFrame(columns=COLUMNS_BASE + COLUMNS_EXTRA).to_csv(DATA_PATH, index=False, encoding="utf-8")
         else:
@@ -759,19 +777,54 @@ def page_login():
         else:
             st.error("Usuario o contraseña incorrectos.")
 
-# ===================== Router con sesión =====================
-ensure_users_csv()
-if "user" not in st.session_state:
-    page_login()
-else:
+# ===================== Sidebar: sesión, navegación e importador =====================
+def sidebar_common():
     with st.sidebar:
-        st.markdown(f"**👤 {st.session_state.user['name']}**  \n`{st.session_state.user['role']}`")
-        if st.button("Cerrar sesión", use_container_width=True):
-            logout(); st.rerun()
+        if "user" in st.session_state:
+            st.markdown(f"**👤 {st.session_state.user['name']}**  \n`{st.session_state.user['role']}`")
+            if st.button("Cerrar sesión", use_container_width=True):
+                logout(); st.rerun()
+        st.markdown("---")
+        st.caption("CSV en: `.data/leads.csv` • `.data/users.csv`")
+
+        st.markdown("### Importar CSV")
+        up_leads = st.file_uploader("leads.csv", type=["csv"], key="up_leads")
+        if up_leads is not None:
+            try:
+                dfL = pd.read_csv(up_leads, dtype=str).fillna("")
+                save_data(dfL)
+                st.success("✅ leads.csv importado en .data/")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al importar leads.csv: {e}")
+
+        up_users = st.file_uploader("users.csv", type=["csv"], key="up_users")
+        if up_users is not None:
+            try:
+                dfU = pd.read_csv(up_users, dtype=str).fillna("")
+                for c in USER_COLUMNS:
+                    if c not in dfU.columns: dfU[c] = ""
+                dfU = dfU[USER_COLUMNS]
+                with FileLock(str(FILELOCK_PATH)):
+                    dfU.to_csv(USERS_PATH, index=False, encoding="utf-8")
+                load_users.clear()
+                st.success("✅ users.csv importado en .data/")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al importar users.csv: {e}")
+
         st.markdown("---")
         page = st.radio("Ir a:", ["🧑‍💼 Leads","🎯 Seguimiento","📊 Dashboard / Tablero"], index=0)
-        st.caption("CSV en: .data/leads.csv • .data/users.csv")
+    return page
 
+# ===================== Router con sesión =====================
+ensure_users_csv()
+page = None
+if "user" not in st.session_state:
+    sidebar_common()
+    page_login()
+else:
+    page = sidebar_common()
     if page.startswith("🧑‍💼"):
         page_leads()
     elif page.startswith("🎯"):
