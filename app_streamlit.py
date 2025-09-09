@@ -533,6 +533,19 @@ def page_seguimiento():
         with c1:
             st.caption(f"🧑 {row['id_lead']} • {row['nombre/alias']} {row['apellidos']} {row['estado_color']}")
             st.write(f"📱 {row['celular'] or '—'} · ✉️ {row['correo'] or '—'}")
+
+            # ── NUEVO: Mostrar 📚 Interés en curso(s) como chips ───────────────────
+            intereses = str_to_list(row.get("interes_curso(puede sellecionar varios)",""))
+            if intereses:
+                chips = " ".join([
+                    f"<span style='display:inline-block;padding:4px 10px;border-radius:999px;background:#eef2ff;margin:2px;font-size:12px'>{i}</span>"
+                    for i in intereses
+                ])
+                st.markdown(f"<div>📚 <strong>Interés en curso(s):</strong> {chips}</div>", unsafe_allow_html=True)
+            else:
+                st.write("📚 Interés en curso(s): —")
+            # ────────────────────────────────────────────────────────────────────────
+
         with c2:
             st.write(f"👨‍💼 Responsable actual: **{st.session_state.user['name']}**")
             st.write(f"📅 Próxima: **{row['proxima_accion_fecha'] or '—'}** · {row['proxima_accion_desc'] or '—'}")
