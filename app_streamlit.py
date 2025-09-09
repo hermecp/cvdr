@@ -1,14 +1,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # CRM de Leads (Streamlit) – listo para Streamlit Community Cloud
-# - Login por usuario+contraseña
-# - Leads: consultar / agregar / editar
-# - Seguimiento: Hoy / Por fecha / Todos (con filtro rápido)
-# - Historial UNIFICADO opcional (tabla)
-# - Dashboard bilingüe (ES/EN) con gráficas y tablas
-# - FIX: id_lead autoincremental continuo (L0001, L0002, …)
-# - Listo para la nube: .data/, FileLock, st.rerun()
 # ──────────────────────────────────────────────────────────────────────────────
-
 from __future__ import annotations
 import os
 import re
@@ -101,7 +93,6 @@ CAT_COMO = [
     "Recomendación","Volante/Impreso","Evento/Conferencia","Otro",
 ]
 
-# Embudo (solo para 🟡) — inglés (español)
 FUNNEL_YELLOW = [
     "Follow-up (Seguimiento)",
     "Materials (Materiales/flyer/videos)",
@@ -193,10 +184,6 @@ def save_data(df: pd.DataFrame):
 
 # ---------- ID autoincremental ----------
 def next_lead_id(df: pd.DataFrame) -> str:
-    """
-    Genera el siguiente id_lead tipo L0001… tomando el mayor número
-    encontrado al final del id_lead actual (si no hay, empieza en 1).
-    """
     if df.empty:
         return "L0001"
     ids = df["id_lead"].astype(str).tolist()
@@ -390,7 +377,6 @@ def page_leads():
         with st.form("form_new"):
             ctop = st.columns([1,1,1,1])
             with ctop[0]:
-                # Mostrar el siguiente ID que se asignará
                 st.caption(f"Siguiente ID asignado: **{next_lead_id(df)}**")
             c1,c2,c3,c4 = st.columns(4)
             nombre = c1.text_input("👤 Nombre / alias")
@@ -412,7 +398,7 @@ def page_leads():
             ok = st.form_submit_button("Guardar")
 
         if ok:
-            fid = next_lead_id(df)  # ← AUTOINCREMENTAL
+            fid = next_lead_id(df)
             f_fecha, f_hora = timestamp_pair()
             row = {
                 "id_lead": fid, "fecha_registro": f_fecha, "hora_registro": f_hora,
@@ -505,7 +491,6 @@ def page_seguimiento():
     fecha_sel = st.date_input("Selecciona fecha", value=today()) if vista=="Por fecha" else None
     df = filter_by_mode(base_all, vista, fecha_sel)
 
-    # Buscador sencillo para "Todos"
     if vista == "Todos":
         qlist = st.text_input("Filtro rápido (nombre / correo / teléfono):").strip().lower()
         if qlist:
