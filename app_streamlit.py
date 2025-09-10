@@ -8,33 +8,83 @@
 # - Dashboard bilingüe (ES/EN) con gráficas y tablas
 # - FIX: id_lead autoincremental continuo (L0001, L0002, …)
 # - FIX: celular/teléfono se guardan y buscan sin espacios
+# - NUEVO: Respaldo diario automático de CSV (leads.csv y users.csv) + botón manual
+# - HARDENED: rutas absolutas, guardado atómico y “autosanación” de color/etapa
 # ──────────────────────────────────────────────────────────────────────────────
 
 from __future__ import annotations
 import re
+import os
+import sys
 import hashlib
+import shutil
 from pathlib import Path
 from datetime import datetime, date, timedelta
+from contextlib import contextmanager
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-# ===================== Config & Paths =====================
+# ===================== Config & Paths (rutas absolutas + carpeta data/) =====================
 st.set_page_config(page_title="CRM Leads", page_icon="🧑‍💼", layout="wide")
-DATA_PATH = Path("leads.csv")
-USERS_PATH = Path("users.csv")
+
+def _base_dir():
+    try:
+        return Path(__file__).resolve().parent
+    except NameError:
+        # __file__ puede no existir en algunos runtimes; caer a cwd
+        return Path.cwd()
+
+BASE_DIR  = _base_dir()
+DATA_DIR  = (BASE_DIR / "data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+DATA_PATH   = DATA_DIR / "leads.csv"
+USERS_PATH  = DATA_DIR / "users.csv"
+BACKUP_DIR  = DATA_DIR / "backups"           # Carpeta de respaldos dentro de /data
+BACKUP_TAG  = DATA_DIR / ".last_backup_tag"  # Marca para evitar respaldar varias veces al día
+
+# ===================== Bloqueo de archivo (best-effort, multiproceso) =====================
+@contextmanager
+def file_lock(lock_path: Path):
+    """
+    Bloqueo simple con archivo .lock (Unix: fcntl; Windows: sin bloqueo estricto).
+    Evita escrituras concurrentes que puedan corromper CSV.
+    """
+    lock_file = lock_path.with_suffix(lock_path.suffix + ".lock")
+    fd = None
+    try:
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+        try:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except Exception:
+            # En Windows u otros entornos sin fcntl, seguimos sin bloqueo estricto.
+            pass
+        yield
+    finally:
+        try:
+            if fd is not None:
+                try:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                os.close(fd)
+        except Exception:
+            pass
 
 # ===================== Usuarios (default + helpers) =====================
 DEFAULT_USER_ROWS = [
-    ["admin","Admin","Admin","ba26148e3bc77341163135d123a4dc26664ff0497da04c0b3e83218c97f70c45"],         # 
-    ["director","Director","Director","c34926c2783dca6cf34d1160ed5a04e1615cb813d3b5798efc29cc590cce4c91"],   # 
-    ["subdirector","Subdirector","Subdirector","58845944d08671209339de539469a100c8e9d6e17dcee9a447c7751937f7cb48"],  #
-    ["favio","Favio","Ventas","e28ebb5d991f9ebbc5f2d26b199586e9bfb8fffd3b76dca200efd75eb68e999d"],          # 
-    ["nancy","Nancy","Ventas","64b1bce63509372952ad7191af86bddcb9939772404c236ff67b89d0442496d0"],          # 
-    ["rosario","Rosario","Ventas","706f42010b29d6376c768d717a19b49dc50b8b7133bffa1ae36d0fbbc32d59bc"],       # 
-    ["haydee","Haydee","Comunicación","6b90d996f7c98698cd95d0d86f1298dbb9df89df34f16136b259a4efcaba04d8"],   # 
-    ["nora","Nora","Comunicación","f54fd67046eeca39cd1f760730d3b48b1c00d3830f0c5b9fa5ace0a7683a22058"],      # 
+    ["admin","Admin","Admin","ba26148e3bc77341163135d123a4dc26664ff0497da04c0b3e83218c97f70c45"],
+    ["director","Director","Director","c34926c2783dca6cf34d1160ed5a04e1615cb813d3b5798efc29cc590cce4c91"],
+    ["subdirector","Subdirector","Subdirector","58845944d08671209339de539469a100c8e9d6e17dcee9a447c7751937f7cb48"],
+    ["favio","Favio","Ventas","e28ebb5d991f9ebbc5f2d26b199586e9bfb8fffd3b76dca200efd75eb68e999d"],
+    ["nancy","Nancy","Ventas","64b1bce63509372952ad7191af86bddcb9939772404c236ff67b89d0442496d0"],
+    ["rosario","Rosario","Ventas","706f42010b29d6376c768d717a19b49dc50b8b7133bffa1ae36d0fbbc32d59bc"],
+    ["haydee","Haydee","Comunicación","6b90d996f7c98698cd95d0d86f1298dbb9df89df34f16136b259a4efcaba04d8"],
+    ["nora","Nora","Comunicación","f54fd67046eeca39cd1f760730d3b48b1c00d3830f0c5b9fa5ace0a7683a22058"],
 ]
 USER_COLUMNS = ["username","name","role","password_hash"]
 
@@ -42,15 +92,18 @@ def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 def ensure_users_csv():
+    USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not USERS_PATH.exists():
-        pd.DataFrame(DEFAULT_USER_ROWS, columns=USER_COLUMNS).to_csv(USERS_PATH, index=False, encoding="utf-8")
+        with file_lock(USERS_PATH):
+            pd.DataFrame(DEFAULT_USER_ROWS, columns=USER_COLUMNS).to_csv(USERS_PATH, index=False, encoding="utf-8")
     else:
         dfu = pd.read_csv(USERS_PATH, dtype=str).fillna("")
         for c in USER_COLUMNS:
             if c not in dfu.columns:
                 dfu[c] = ""
         dfu = dfu[USER_COLUMNS]
-        dfu.to_csv(USERS_PATH, index=False, encoding="utf-8")
+        with file_lock(USERS_PATH):
+            dfu.to_csv(USERS_PATH, index=False, encoding="utf-8")
 
 @st.cache_data(ttl=60)
 def load_users() -> pd.DataFrame:
@@ -140,24 +193,16 @@ def timestamp_pair():
     dt = datetime.now(); return dt.date().isoformat(), dt.strftime("%H:%M:%S")
 
 def parse_date_safe(s):
-    """
-    Acepta ISO (YYYY-MM-DD), YYYY/MM/DD y dd/mm/YYYY o dd-mm-YYYY,
-    sin warnings. Devuelve date o None.
-    """
     if s is None:
         return None
     s_str = str(s).strip()
     if not s_str:
         return None
-
-    # Intentos con formatos explícitos
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
             return datetime.strptime(s_str, fmt).date()
         except ValueError:
             pass
-
-    # Fallback robusto: parser de pandas con dayfirst=True y control de NaT
     ts = pd.to_datetime(s_str, dayfirst=True, errors="coerce")
     return ts.date() if pd.notna(ts) else None
 
@@ -169,42 +214,49 @@ def list_to_str(vals: list[str]) -> str:
     return " | ".join([v for v in vals if v])
 
 def clean_space_only(s: str) -> str:
-    """Quita únicamente espacios en blanco de la cadena (teléfonos), conservando signos y dígitos."""
     if s is None:
         return ""
     return re.sub(r"\s+", "", str(s))
 
-# ===================== IO CSV Leads =====================
+# ===================== IO CSV Leads (asegurar columnas + guardado atómico) =====================
 def ensure_csv():
+    DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not DATA_PATH.exists():
-        pd.DataFrame(columns=COLUMNS_BASE + COLUMNS_EXTRA).to_csv(DATA_PATH, index=False, encoding="utf-8")
+        with file_lock(DATA_PATH):
+            pd.DataFrame(columns=COLUMNS_BASE + COLUMNS_EXTRA).to_csv(DATA_PATH, index=False, encoding="utf-8")
     else:
         df = pd.read_csv(DATA_PATH, dtype=str).fillna("")
+        changed = False
         for c in COLUMNS_BASE + COLUMNS_EXTRA:
             if c not in df.columns:
                 df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
+                changed = True
         df = df[COLUMNS_BASE + COLUMNS_EXTRA]
-        df.to_csv(DATA_PATH, index=False, encoding="utf-8")
+        if changed:
+            _atomic_to_csv(df, DATA_PATH)
 
 @st.cache_data(ttl=10)
 def load_data() -> pd.DataFrame:
     ensure_csv()
     return pd.read_csv(DATA_PATH, dtype=str).fillna("")
 
+def _atomic_to_csv(df: pd.DataFrame, path: Path):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with file_lock(path):
+        df.to_csv(tmp, index=False, encoding="utf-8")
+        Path(tmp).replace(path)
+
 def save_data(df: pd.DataFrame):
+    # Normaliza columnas/orden y guarda de forma atómica
     for c in COLUMNS_BASE + COLUMNS_EXTRA:
         if c not in df.columns:
             df[c] = "" if c not in ("amarillo_contador","total_atenciones") else "0"
     df = df[COLUMNS_BASE + COLUMNS_EXTRA].copy().fillna("")
-    df.to_csv(DATA_PATH, index=False, encoding="utf-8")
+    _atomic_to_csv(df, DATA_PATH)
     load_data.clear()
 
 # ---------- ID autoincremental ----------
 def next_lead_id(df: pd.DataFrame) -> str:
-    """
-    Genera el siguiente id_lead tipo L0001… tomando el mayor número
-    encontrado al final del id_lead actual (si no hay, empieza en 1).
-    """
     if df.empty:
         return "L0001"
     ids = df["id_lead"].astype(str).tolist()
@@ -229,8 +281,11 @@ def etapa_is_lost(etapa: str) -> bool:
     return ("Perdido" in e) or e.startswith("Lost")
 
 def compute_color(row) -> str:
+    # Respeta el color guardado si es válido
     color = str(row.get("estado_color","")).strip()
-    if color in {"🔴","🟡","🟢"}: return color
+    if color in {"🔴","🟡","🟢"}:
+        return color
+    # Si no había color persistido, calcular por reglas
     etapa = str(row.get("funnel_etapas","")).strip()
     ult = parse_date_safe(row.get("fecha_ultimo_contacto",""))
     if etapa_is_won(etapa): return "🟢"
@@ -241,6 +296,7 @@ def compute_color(row) -> str:
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     df = df.copy()
+    # Solo rellenar color cuando está vacío; no sobre-escribir persistido
     df["estado_color"] = df.apply(compute_color, axis=1)
     df["_prox"] = df["proxima_accion_fecha"].apply(parse_date_safe)
     df["_reg"]  = df["fecha_registro"].apply(parse_date_safe)
@@ -278,6 +334,87 @@ def apply_outcome(row, outcome: str, nota: str, user: str):
     next_desc = (row.get("proxima_accion_desc","") or desc)
     nota_final = nota or outcome
     return color, stage, next_date, next_desc, nota_final
+
+# ===================== Autosanación y persistencia de color/etapa =====================
+def heal_and_persist(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Garantiza que:
+    - Leads con funnel 'Won/Lost' tengan estado_color consistente (🟢/🔴).
+    - Si estado_color está vacío, se compute y **se guarde** de vuelta en CSV.
+    Evita que mañana aparezcan en 🟡 si hoy estaban en 🟢/🔴.
+    """
+    if df.empty: return df
+    df2 = df.copy()
+    changed = False
+
+    # 1) Ajuste por etapa ganada/perdida
+    for i, row in df2.iterrows():
+        etapa = str(row.get("funnel_etapas",""))
+        color = str(row.get("estado_color",""))
+        if etapa_is_won(etapa) and color != "🟢":
+            df2.at[i, "estado_color"] = "🟢"; changed = True
+        elif etapa_is_lost(etapa) and color != "🔴":
+            df2.at[i, "estado_color"] = "🔴"; changed = True
+
+    # 2) Completar color faltante usando compute_color
+    mask_empty = (~df2["estado_color"].isin(["🔴","🟡","🟢"]))
+    if mask_empty.any():
+        df2.loc[mask_empty, "estado_color"] = df2[mask_empty].apply(compute_color, axis=1)
+        changed = True
+
+    if changed:
+        save_data(df2)
+        return df2
+    return df2
+
+# ===================== Respaldo diario (AUTO + Manual) =====================
+def _backup_one(src: Path, date_str: str) -> Path | None:
+    if not src.exists(): return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    dst = BACKUP_DIR / f"{src.stem}_{date_str}{src.suffix}"
+    if not dst.exists():
+        shutil.copy2(src, dst)
+    return dst
+
+def daily_backup(keep_days: int = 60) -> list[Path]:
+    """
+    Crea copias por día de leads.csv y users.csv (una vez por fecha).
+    Además, elimina respaldos con antigüedad mayor a keep_days.
+    """
+    today_str = today().isoformat()
+    # Evita múltiples backups el mismo día
+    last = BACKUP_TAG.read_text().strip() if BACKUP_TAG.exists() else ""
+    paths: list[Path] = []
+    if last != today_str:
+        for p in (DATA_PATH, USERS_PATH):
+            out = _backup_one(p, today_str)
+            if out: paths.append(out)
+        BACKUP_TAG.write_text(today_str, encoding="utf-8")
+
+    # Depuración simple por antigüedad
+    for f in BACKUP_DIR.glob("*.csv"):
+        try:
+            parts = f.stem.split("_")
+            if len(parts) >= 2:
+                d = parse_date_safe(parts[-1])
+                if d and (today() - d).days > keep_days:
+                    f.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return paths
+
+def manual_backup_zip() -> Path | None:
+    """
+    Genera un .zip con los CSV actuales y las copias del día.
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_base = BACKUP_DIR / f"backup_{stamp}"
+    # Asegura respaldo de hoy antes de zipear
+    daily_backup()
+    # Zip de toda la carpeta "backups" (incluye copias del día)
+    shutil.make_archive(str(zip_base), "zip", BACKUP_DIR)
+    return zip_base.with_suffix(".zip")
 
 # ===================== Estado global (UI) =====================
 if "selected_lead_id" not in st.session_state: st.session_state.selected_lead_id = None
@@ -410,7 +547,6 @@ def page_leads():
         with st.form("form_new"):
             ctop = st.columns([1,1,1,1])
             with ctop[0]:
-                # Mostrar el siguiente ID que se asignará
                 st.caption(f"Siguiente ID asignado: **{next_lead_id(df)}**")
             c1,c2,c3,c4 = st.columns(4)
             nombre = c1.text_input("👤 Nombre / alias")
@@ -432,12 +568,11 @@ def page_leads():
             ok = st.form_submit_button("Guardar")
 
         if ok:
-            fid = next_lead_id(df)  # ← AUTOINCREMENTAL
+            fid = next_lead_id(df)
             f_fecha, f_hora = timestamp_pair()
             row = {
                 "id_lead": fid, "fecha_registro": f_fecha, "hora_registro": f_hora,
                 "nombre/alias": nombre, "apellidos": apellidos, "genero": genero, "edad": str(edad).strip(),
-                # >>> Guardar teléfonos SIN espacios
                 "celular": clean_space_only(celular),
                 "telefono": clean_space_only(telefono),
                 "correo": correo,
@@ -453,6 +588,7 @@ def page_leads():
             }
             save_data(pd.concat([df, pd.DataFrame([row])], ignore_index=True))
             st.success(f"✅ Lead creado: {fid}")
+            st.experimental_rerun()
 
     else:  # Editar
         st.subheader("✏️ Editar")
@@ -493,7 +629,6 @@ def page_leads():
             idx = df.index[df["id_lead"].astype(str) == sel_id][0]
             updates = {
                 "nombre/alias":nombre,"apellidos":apellidos,"genero":genero,"edad":str(edad).strip(),
-                # >>> Guardar teléfonos SIN espacios
                 "celular": clean_space_only(celular),
                 "telefono": clean_space_only(telefono),
                 "correo":correo,
@@ -503,7 +638,9 @@ def page_leads():
                 "proxima_accion_fecha": prox_fecha.isoformat(),"proxima_accion_desc":prox_desc
             }
             for k,v in updates.items(): df.loc[idx,k]=v
-            save_data(df); st.success("💾 Lead actualizado.")
+            save_data(df)
+            st.success("💾 Lead actualizado.")
+            st.experimental_rerun()
 
 # ---------- Seguimiento ----------
 def filter_by_mode(base: pd.DataFrame, mode: str, ref: date | None = None) -> pd.DataFrame:
@@ -531,7 +668,6 @@ def page_seguimiento():
     fecha_sel = st.date_input("Selecciona fecha", value=today()) if vista=="Por fecha" else None
     df = filter_by_mode(base_all, vista, fecha_sel)
 
-    # Buscador sencillo para "Todos" (ignora espacios en teléfonos)
     if vista == "Todos":
         qlist = st.text_input("Filtro rápido (nombre / correo / teléfono):").strip().lower()
         if qlist:
@@ -570,7 +706,6 @@ def page_seguimiento():
             st.caption(f"🧑 {row['id_lead']} • {row['nombre/alias']} {row['apellidos']} {row['estado_color']}")
             st.write(f"📱 {row['celular'] or '—'} · ✉️ {row['correo'] or '—'}")
 
-            # ── NUEVO: Mostrar 📚 Interés en curso(s) como chips ───────────────────
             intereses = str_to_list(row.get("interes_curso(puede sellecionar varios)",""))
             if intereses:
                 chips = " ".join([
@@ -580,7 +715,6 @@ def page_seguimiento():
                 st.markdown(f"<div>📚 <strong>Interés en curso(s):</strong> {chips}</div>", unsafe_allow_html=True)
             else:
                 st.write("📚 Interés en curso(s): —")
-            # ────────────────────────────────────────────────────────────────────────
 
         with c2:
             st.write(f"👨‍💼 Responsable actual: **{st.session_state.user['name']}**")
@@ -630,9 +764,9 @@ def page_seguimiento():
             if manual_date: next_date = manual_date
             if manual_desc and manual_desc.strip(): next_desc = manual_desc.strip()
 
-            base3 = enrich(load_data())
+            base3 = load_data()  # ← trabaja sobre CSV real
             i3 = base3.index[base3["id_lead"].astype(str)==str(row["id_lead"])][0]
-            old = compute_color(base3.loc[i3])
+            old = str(base3.loc[i3,"estado_color"] or "")
             base3 = add_attention(base3, i3, old, new_color, nota_final, usuario)
             updates = {
                 "estado_color":new_color,"funnel_etapas":new_stage,
@@ -645,7 +779,11 @@ def page_seguimiento():
             if nota_final:
                 obs = str(base3.loc[i3,"observaciones"] or "")
                 base3.loc[i3,"observaciones"] = (obs + ("\n" if obs else "") + f"{ts_now()} | {usuario or 'sin usuario'} | {nota_final}")
-            save_data(base3); st.success("✅ Seguimiento actualizado.")
+            # Autosanar y guardar
+            base3 = heal_and_persist(base3)
+            save_data(base3)
+            st.success("✅ Seguimiento actualizado.")
+            st.experimental_rerun()
 
         st.markdown("---")
         if st.toggle("👀 Mostrar historial completo del lead", value=False, key=f"h_{row['id_lead']}"):
@@ -820,12 +958,19 @@ def page_login():
         if info:
             st.session_state.user = info
             st.success(f"Bienvenido, {info['name']} ({info['role']})")
-            st.rerun()  # actualizado (antes: st.experimental_rerun)
+            st.rerun()
         else:
             st.error("Usuario o contraseña incorrectos.")
 
 # ===================== Router con sesión =====================
+# Asegura CSV, **autosanación** y respaldo diario automático (una vez al día)
 ensure_users_csv()
+ensure_csv()
+# Sanear y persistir color/etapa antes de cualquier vista (evita “amanecer” en amarillo)
+df_boot = heal_and_persist(load_data())
+# (heal_and_persist ya guarda si hizo cambios)
+daily_backup()  # ← respaldo AUTO diario (leads.csv y users.csv)
+
 if "user" not in st.session_state:
     page_login()
 else:
@@ -833,10 +978,31 @@ else:
         st.markdown(f"**👤 {st.session_state.user['name']}**  \n`{st.session_state.user['role']}`")
         if st.button("Cerrar sesión", use_container_width=True):
             logout()
-            st.rerun()  # actualizado (antes: st.experimental_rerun)
+            st.rerun()
         st.markdown("---")
+
+        # Zona de respaldo manual
+        st.subheader("🧰 Respaldo")
+        if st.button("Respaldar ahora (ZIP)", use_container_width=True):
+            zip_path = manual_backup_zip()
+            if zip_path and zip_path.exists():
+                with open(zip_path, "rb") as f:
+                    st.download_button(
+                        label=f"⬇️ Descargar {zip_path.name}",
+                        data=f.read(),
+                        file_name=zip_path.name,
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+                st.success("Respaldo generado.")
+            else:
+                st.warning("No se pudo generar el respaldo.")
+
+        st.caption("Copia diaria automática en carpeta /data/backups")
+        st.markdown("---")
+
         page = st.radio("Ir a:", ["🧑‍💼 Leads","🎯 Seguimiento","📊 Dashboard / Tablero"], index=0)
-        st.caption("CSV: leads.csv • users.csv")
+        st.caption("CSV: data/leads.csv • data/users.csv • data/backups/*.csv")
 
     if page.startswith("🧑‍💼"):
         page_leads()
